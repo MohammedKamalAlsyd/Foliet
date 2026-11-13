@@ -1,90 +1,124 @@
-import { useId } from "react";
+import { cn } from "@/lib/utils";
+import { type LogoProps, type LogoSize, LOGO_SIZES } from "@/types/props";
 
-interface FolietLogoProps {
-  size?: number;
-  showText?: boolean;
+export const LogoIcon = ({
+  size = "md",
+  className,
+}: {
+  size?: LogoSize;
   className?: string;
-}
-
-export function FolietMark({ size = 24 }: { size?: number }) {
-  const id = useId();
-  const gradId = `foliet-grad-${id}`;
+}) => {
+  const pixelSize =
+    typeof size === "number" ? size : (LOGO_SIZES[size] ?? LOGO_SIZES.md);
 
   return (
     <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
+      width={pixelSize}
+      height={pixelSize}
+      viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      className="shrink-0 select-none"
-      aria-label="Foliet Logo"
+      className={cn("shrink-0 select-none text-foreground", className)}
+      aria-hidden="true"
     >
-      <defs>
-        <linearGradient
-          id={gradId}
-          x1="4"
-          y1="4"
-          x2="28"
-          y2="28"
-          gradientUnits="userSpaceOnUse"
-        >
-          <stop offset="0%" stopColor="#14B8A6" />
-          <stop offset="100%" stopColor="#06B6D4" />
-        </linearGradient>
-      </defs>
-      {/* Back sheet */}
-      <rect
-        x="7"
-        y="4"
-        width="17"
-        height="22"
-        rx="3.5"
-        stroke={`url(#${gradId})`}
-        strokeWidth="1.8"
-        opacity="0.45"
+      {/* Simplified flat rosette: 4 intersecting folios around an open center */}
+      <ellipse
+        cx="12"
+        cy="12"
+        rx="4"
+        ry="9.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
       />
-      {/* Front folded folio */}
-      <path
-        d="M11 8H22.5L26 11.5V24.5C26 26.1569 24.6569 27.5 23 27.5H11C9.34315 27.5 8 26.1569 8 24.5V11C8 9.34315 9.34315 8 11 8Z"
-        fill="var(--surface-panel)"
-        stroke={`url(#${gradId})`}
-        strokeWidth="2"
-        strokeLinejoin="round"
+      <ellipse
+        cx="12"
+        cy="12"
+        rx="4"
+        ry="9.5"
+        transform="rotate(45 12 12)"
+        stroke="currentColor"
+        strokeWidth="1.5"
       />
-      {/* Fold corner + bookmark line */}
-      <path
-        d="M22 8V12H26"
-        stroke={`url(#${gradId})`}
-        strokeWidth="1.8"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+      <ellipse
+        cx="12"
+        cy="12"
+        rx="4"
+        ry="9.5"
+        transform="rotate(90 12 12)"
+        stroke="currentColor"
+        strokeWidth="1.5"
       />
-      <path
-        d="M12.5 16H20.5M12.5 20.5H17.5"
-        stroke={`url(#${gradId})`}
-        strokeWidth="2"
-        strokeLinecap="round"
+      <ellipse
+        cx="12"
+        cy="12"
+        rx="4"
+        ry="9.5"
+        transform="rotate(135 12 12)"
+        stroke="currentColor"
+        strokeWidth="1.5"
       />
+      <circle cx="12" cy="12" r="2" className="fill-background" />
+      <circle cx="12" cy="12" r="2" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
-}
+};
 
-export function FolietLogo({
-  size = 24,
+export const FullLogo = ({
+  size = "md",
   showText = true,
-  className = "",
-}: FolietLogoProps) {
-  return (
-    <div
-      className={`inline-flex items-center gap-2.5 select-none ${className}`}
-    >
-      <FolietMark size={size} />
+  subtitle,
+  className,
+  textClassName,
+  onClick,
+}: LogoProps) => {
+  const pixelSize =
+    typeof size === "number" ? size : (LOGO_SIZES[size] ?? LOGO_SIZES.md);
+
+  const content = (
+    <>
+      <LogoIcon size={pixelSize} />
       {showText && (
-        <span className="font-sans font-bold tracking-tight text-sm text-[var(--text-primary)]">
-          Foliet
+        <span
+          className={cn(
+            "flex flex-col justify-center text-left leading-none",
+            textClassName,
+          )}
+        >
+          <span className="font-sans text-base font-semibold tracking-tight text-foreground">
+            foliet
+          </span>
+          {subtitle && (
+            <span className="mt-1 font-sans text-xs font-normal text-muted-foreground">
+              {subtitle}
+            </span>
+          )}
         </span>
       )}
+    </>
+  );
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(
+          "inline-flex items-center gap-3 rounded-md select-none cursor-pointer transition-opacity duration-150 hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          className,
+        )}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className={cn("inline-flex items-center gap-3 select-none", className)}
+    >
+      {content}
     </div>
   );
-}
+};
+
+export default FullLogo;
