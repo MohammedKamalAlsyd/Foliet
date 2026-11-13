@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "foliet",
-        "width": 800,
-        "height": 600
+        "title": "Foliet",
+        "width": 1280,
+        "height": 840,
+        "decorations": false,
+        "resizable": true,
+        "fullscreen": false,
+        "transparent": false
       }
     ],
     "security": {
@@ -30,6 +34,14 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["pdf"],
+        "name": "PDF Document",
+        "mimeType": "application/pdf",
+        "role": "Viewer"
+      }
     ]
   }
 }
