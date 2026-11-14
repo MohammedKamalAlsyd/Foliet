@@ -32,6 +32,7 @@ export function toCatalogItem(item: CatalogItem): CatalogItem {
         addedAt: item.addedAt,
         lastOpenedAt: item.lastOpenedAt,
         isIndexed: item.isIndexed,
+        annotationCount: item.annotationCount,
     };
 }
 

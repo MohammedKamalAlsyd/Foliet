@@ -26,4 +26,7 @@ export interface CatalogItem {
 
     // Rag Data
     isIndexed?: boolean;
+
+    // Other
+    annotationCount?: number;
 }

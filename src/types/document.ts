@@ -29,5 +29,18 @@ export interface DocumentItem {
     id: string;
     title: string;
     pages: number;
+    filePath?: string;
+    lastPage?: number;
+    scrollOffset?: number;
+    zoom?: number;
+    extractedAnnotations?: PdfAnnotation[];
+}
+
+export interface PdfOpenResult {
+    docId: string;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    numPages: number;
     extractedAnnotations?: PdfAnnotation[];
 }
