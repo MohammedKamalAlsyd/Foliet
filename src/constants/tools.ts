@@ -68,3 +68,12 @@ export const DEFAULT_SELECT_TOOL = {
     strokeWidth: 2,
     underlineStyle: "solid" as const,
 };
+
+export const PRESET_COLORS = [
+    { name: "Yellow", hex: "#FACC15" },
+    { name: "Terracotta", hex: "#B44327" },
+    { name: "Red", hex: "#EF4444" },
+    { name: "Green", hex: "#10B981" },
+    { name: "Cyan", hex: "#06B6D4" },
+    { name: "Indigo", hex: "#635BFF" },
+] as const;

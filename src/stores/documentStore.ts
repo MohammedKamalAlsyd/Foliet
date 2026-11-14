@@ -27,7 +27,6 @@ export interface DocumentState {
     saveDocument: () => Promise<boolean>;
 }
 
-// Kept outside Zustand subscribers so large PDF buffers never trigger re-renders
 let activePdfBuffer: ArrayBuffer | null = null;
 let saveExecutor: (() => Promise<boolean>) | null = null;
 let saveSequence = 0;
@@ -35,10 +34,10 @@ let inFlightSave: { docId: string; token: number; promise: Promise<boolean> } | 
 
 export const getActivePdfBuffer = (): ArrayBuffer | null => activePdfBuffer;
 
-/** Returns an in-memory buffer if loaded, or a streamable Tauri asset URL for instant first-page load. */
+/** Streams local PDFs via Rust `foliet-pdf` (HTTP Range / 206 Partial Content) for instant open on large files. */
 export const getActivePdfSource = (doc: DocumentItem | null): ArrayBuffer | string | null => {
     if (activePdfBuffer) return activePdfBuffer;
-    if (doc?.filePath) return convertFileSrc(doc.filePath);
+    if (doc?.filePath) return convertFileSrc(doc.filePath, "foliet-pdf");
     return null;
 };
 
@@ -68,10 +67,11 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     },
 
     setExtractedAnnotations: (docId, annotations) =>
-        set((state) => {
-            if (state.activeDoc?.id !== docId) return state;
-            return { activeDoc: { ...state.activeDoc, extractedAnnotations: annotations } };
-        }),
+        set((state) =>
+            state.activeDoc?.id === docId
+                ? { activeDoc: { ...state.activeDoc, extractedAnnotations: annotations } }
+                : state,
+        ),
 
     setDocPageCount: (docId, pages) =>
         set((state) =>

@@ -1,0 +1,16 @@
+.react-pdf__Page {
+  position: relative;
+}
+
+.react-pdf__Page__textContent ::selection {
+  background-color: var(--selection-bg);
+}
+
+.react-pdf__Page__annotations.annotationLayer {
+  pointer-events: none;
+}
+
+.ctrl-active .react-pdf__Page__annotations.annotationLayer a {
+  pointer-events: auto;
+  cursor: pointer;
+}

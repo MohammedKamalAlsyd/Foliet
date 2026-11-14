@@ -1,5 +1,5 @@
 /**
- * SynapseReader - Tool & Toolbar Preset Types
+ * Foliet - Tool & Toolbar Preset Types
  */
 
 export type ToolType =
