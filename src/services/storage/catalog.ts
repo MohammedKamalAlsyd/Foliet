@@ -54,6 +54,21 @@ export function deduplicateDocuments(docs: CatalogItem[]): CatalogItem[] {
     return result;
 }
 
+export function normalizeCollections(names: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (const raw of names) {
+        const clean = raw.trim();
+        const key = clean.toLowerCase();
+        if (!clean || seen.has(key)) continue;
+        seen.add(key);
+        result.push(clean);
+    }
+
+    return result.sort((a, b) => a.localeCompare(b));
+}
+
 export class DocumentCatalogStorage {
     private static store = new LazyStore("library.json");
 
@@ -80,6 +95,24 @@ export class DocumentCatalogStorage {
         await this.store.save();
     }
 
+    public static async getCollections(): Promise<string[]> {
+        try {
+            const cols = await this.store.get<string[]>("collections");
+            return Array.isArray(cols) ? normalizeCollections(cols) : [];
+        } catch (err) {
+            console.error(
+                "DocumentCatalogStorage: Failed to read collections:",
+                err
+            );
+            return [];
+        }
+    }
+
+    public static async saveCollections(collections: string[]): Promise<void> {
+        await this.store.set("collections", normalizeCollections(collections));
+        await this.store.save();
+    }
+
     public static async updateDocument(
         docId: string,
         patch: Partial<CatalogItem>
@@ -100,6 +133,7 @@ export class DocumentCatalogStorage {
 
     public static async clearAll(): Promise<void> {
         await this.store.set("documents", []);
+        await this.store.set("collections", []);
         await this.store.save();
         await BinaryStorage.clearAll();
     }
