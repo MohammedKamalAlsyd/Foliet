@@ -1,8 +1,13 @@
 import { useMemo } from "react";
 
-export function usePdfVirtualizer(currentPage: number, totalPages: number, buffer = 3) {
+export function usePdfVirtualizer(
+    currentPage: number,
+    totalPages: number,
+    buffer = 2,
+) {
+    const safeTotal = Math.max(1, totalPages);
     const start = Math.max(1, currentPage - buffer);
-    const end = Math.min(Math.max(1, totalPages), currentPage + buffer);
+    const end = Math.min(safeTotal, currentPage + buffer);
 
     const renderedPages = useMemo(() => {
         const set = new Set<number>();

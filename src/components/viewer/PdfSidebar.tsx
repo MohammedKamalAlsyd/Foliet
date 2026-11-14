@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bookmark,
   ChevronDown,
@@ -31,28 +31,52 @@ interface PdfSidebarProps {
 
 function OutlineItem({
   node,
-  currentPage,
+  activeId,
+  activeParentIds,
   onJumpToPage,
 }: {
   node: PdfOutlineNode;
-  currentPage: number;
+  activeId: string | null;
+  activeParentIds: Set<string>;
   onJumpToPage: (page: number) => void;
 }) {
   const [expanded, setExpanded] = useState(node.level < 1);
+  const rowRef = useRef<HTMLDivElement>(null);
   const hasChildren = Boolean(node.children?.length);
-  const active = node.pageNumber === currentPage;
+  const isActive = node.id === activeId;
+  const isActiveAncestor = activeParentIds.has(node.id);
+
+  useEffect(() => {
+    if (isActiveAncestor) {
+      setExpanded(true);
+    }
+  }, [isActiveAncestor]);
+
+  useEffect(() => {
+    if (isActive && rowRef.current) {
+      rowRef.current.scrollIntoView({ block: "nearest" });
+    }
+  }, [isActive]);
 
   return (
     <div>
       <div
+        ref={rowRef}
         className={cn(
-          "flex items-center gap-1 rounded-md py-1 pr-2 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:bg-accent",
-          active
+          "relative flex min-h-8 items-center gap-1 rounded-md py-1 pr-2 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:bg-accent",
+          isActive
             ? "bg-accent font-medium text-foreground"
             : "text-muted-foreground",
         )}
         style={{ paddingLeft: `${8 + node.level * 12}px` }}
       >
+        {isActive && (
+          <span
+            aria-hidden="true"
+            className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-[var(--accent-brand)]"
+          />
+        )}
+
         {hasChildren ? (
           <button
             type="button"
@@ -76,19 +100,20 @@ function OutlineItem({
           className="flex min-w-0 flex-1 items-center justify-between gap-2 text-left"
         >
           <span className="truncate">{node.title}</span>
-          <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
             {node.pageNumber}
           </span>
         </button>
       </div>
 
       {hasChildren && expanded && (
-        <div className="flex flex-col">
+        <div className="flex flex-col gap-0.5">
           {node.children!.map((child) => (
             <OutlineItem
               key={child.id}
               node={child}
-              currentPage={currentPage}
+              activeId={activeId}
+              activeParentIds={activeParentIds}
               onJumpToPage={onJumpToPage}
             />
           ))}
@@ -144,27 +169,69 @@ export function PdfSidebar({
   onDeleteBookmark,
   onDeleteCrop,
 }: PdfSidebarProps) {
-  if (!isOpen) return null;
+  const flatOutline = useMemo(() => {
+    const items: { id: string; pageNumber: number; parentIds: string[] }[] = [];
+    const walk = (nodes: PdfOutlineNode[], parentIds: string[]) => {
+      for (const n of nodes) {
+        items.push({ id: n.id, pageNumber: n.pageNumber, parentIds });
+        if (n.children?.length) {
+          walk(n.children, [...parentIds, n.id]);
+        }
+      }
+    };
+    walk(outline, []);
+    return items;
+  }, [outline]);
 
-  const sortedBookmarks = [...bookmarks].sort(
-    (a, b) => a.pageNumber - b.pageNumber,
+  const { activeOutlineId, activeParentIds } = useMemo(() => {
+    let bestId: string | null = null;
+    let bestParents: string[] = [];
+    let bestPage = -1;
+
+    for (const item of flatOutline) {
+      if (item.pageNumber <= currentPage && item.pageNumber >= bestPage) {
+        bestPage = item.pageNumber;
+        bestId = item.id;
+        bestParents = item.parentIds;
+      }
+    }
+
+    return {
+      activeOutlineId: bestId,
+      activeParentIds: new Set(bestParents),
+    };
+  }, [flatOutline, currentPage]);
+
+  const sortedBookmarks = useMemo(
+    () => [...bookmarks].sort((a, b) => a.pageNumber - b.pageNumber),
+    [bookmarks],
   );
+
+  const activeBookmarkId = useMemo(() => {
+    let latestId: string | null = null;
+    for (const bm of sortedBookmarks) {
+      if (bm.pageNumber === currentPage) latestId = bm.id;
+    }
+    return latestId;
+  }, [sortedBookmarks, currentPage]);
+
+  if (!isOpen) return null;
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-muted/30 select-none">
       <Tabs defaultValue="outline" className="flex min-h-0 flex-1 flex-col">
         <div className="p-2">
-          <TabsList className="grid w-full grid-cols-3 h-8">
+          <TabsList className="grid h-8 w-full grid-cols-3">
             <TabsTrigger value="outline" className="gap-1.5 text-xs">
-              <ListTree size={14} strokeWidth={1.5} />
+              <ListTree size={16} strokeWidth={1.5} />
               <span>Contents</span>
             </TabsTrigger>
             <TabsTrigger value="bookmarks" className="gap-1.5 text-xs">
-              <Bookmark size={14} strokeWidth={1.5} />
+              <Bookmark size={16} strokeWidth={1.5} />
               <span>Marks</span>
             </TabsTrigger>
             <TabsTrigger value="figures" className="gap-1.5 text-xs">
-              <Scan size={14} strokeWidth={1.5} />
+              <Scan size={16} strokeWidth={1.5} />
               <span>Figures</span>
             </TabsTrigger>
           </TabsList>
@@ -183,7 +250,8 @@ export function PdfSidebar({
                 <OutlineItem
                   key={node.id}
                   node={node}
-                  currentPage={currentPage}
+                  activeId={activeOutlineId}
+                  activeParentIds={activeParentIds}
                   onJumpToPage={onJumpToPage}
                 />
               ))}
@@ -206,7 +274,7 @@ export function PdfSidebar({
               onClick={() => onAddBookmark(currentPage)}
               className="h-7 gap-1 px-2 text-xs"
             >
-              <Plus size={14} strokeWidth={1.5} />
+              <Plus size={16} strokeWidth={1.5} />
               <span>Page {pageLabels[currentPage - 1] || currentPage}</span>
             </Button>
           </div>
@@ -218,22 +286,28 @@ export function PdfSidebar({
           ) : (
             <div className="flex flex-col gap-1">
               {sortedBookmarks.map((bm) => {
-                const active = bm.pageNumber === currentPage;
+                const active = bm.id === activeBookmarkId;
                 return (
                   <div
                     key={bm.id}
                     className={cn(
-                      "group flex items-center justify-between rounded-md px-2 py-1.5 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:bg-accent",
+                      "group relative flex h-8 items-center justify-between rounded-md px-2 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:bg-accent",
                       active && "bg-accent font-medium text-foreground",
                     )}
                   >
+                    {active && (
+                      <span
+                        aria-hidden="true"
+                        className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-[var(--accent-brand)]"
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => onJumpToPage(bm.pageNumber)}
                       className="flex min-w-0 flex-1 items-center gap-2 text-left"
                     >
                       <Bookmark
-                        size={14}
+                        size={16}
                         strokeWidth={1.5}
                         className="shrink-0 text-[var(--accent-brand)]"
                         fill="currentColor"
@@ -246,9 +320,9 @@ export function PdfSidebar({
                       size="icon-xs"
                       onClick={() => onDeleteBookmark(bm.id)}
                       aria-label="Remove bookmark"
-                      className="h-6 w-6 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                      className="h-6 w-6 opacity-0 transition-opacity duration-150 ease-[var(--ease-foliet)] group-hover:opacity-100 text-muted-foreground hover:text-destructive"
                     >
-                      <Trash2 size={14} strokeWidth={1.5} />
+                      <Trash2 size={16} strokeWidth={1.5} />
                     </Button>
                   </div>
                 );
@@ -288,7 +362,7 @@ export function PdfSidebar({
                       aria-label="Delete figure"
                       className="h-6 w-6 text-muted-foreground hover:text-destructive"
                     >
-                      <Trash2 size={14} strokeWidth={1.5} />
+                      <Trash2 size={16} strokeWidth={1.5} />
                     </Button>
                   </div>
                 </div>

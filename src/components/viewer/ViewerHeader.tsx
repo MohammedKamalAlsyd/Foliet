@@ -3,10 +3,8 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
-  Download,
   Maximize2,
   PanelLeft,
-  Save,
   Search,
   ZoomIn,
   ZoomOut,
@@ -23,9 +21,6 @@ interface ViewerHeaderProps {
   zoomLevel: number;
   isSidebarOpen: boolean;
   isCurrentPageBookmarked: boolean;
-  isDirty: boolean;
-  isSaving: boolean;
-  isExporting: boolean;
   shortcutModifier: string;
   onToggleSidebar: () => void;
   onJumpToPage: (page: number) => void;
@@ -35,8 +30,6 @@ interface ViewerHeaderProps {
   onFitToWidth: () => void;
   onToggleBookmark: () => void;
   onOpenSearch: () => void;
-  onSave: () => void;
-  onExport: () => void;
 }
 
 export function ViewerHeader({
@@ -46,9 +39,6 @@ export function ViewerHeader({
   zoomLevel,
   isSidebarOpen,
   isCurrentPageBookmarked,
-  isDirty,
-  isSaving,
-  isExporting,
   shortcutModifier,
   onToggleSidebar,
   onJumpToPage,
@@ -58,8 +48,6 @@ export function ViewerHeader({
   onFitToWidth,
   onToggleBookmark,
   onOpenSearch,
-  onSave,
-  onExport,
 }: ViewerHeaderProps) {
   const [pageDraft, setPageDraft] = useState(currentLabel);
 
@@ -184,7 +172,7 @@ export function ViewerHeader({
         </Button>
       </div>
 
-      {/* Right: Search, Bookmark, Save & Export */}
+      {/* Right: Search & Bookmark */}
       <div className="flex items-center gap-1">
         <Button
           type="button"
@@ -219,38 +207,6 @@ export function ViewerHeader({
             strokeWidth={1.5}
             fill={isCurrentPageBookmarked ? "currentColor" : "none"}
           />
-        </Button>
-
-        <Separator orientation="vertical" className="mx-1 h-4" />
-
-        <Button
-          type="button"
-          variant={isDirty ? "default" : "ghost"}
-          size="sm"
-          disabled={!isDirty || isSaving}
-          onClick={onSave}
-          title={`Save (${shortcutModifier}+S)`}
-          className="h-7 gap-1.5 px-2.5 text-xs"
-        >
-          <Save size={16} strokeWidth={1.5} />
-          <span className="hidden sm:inline">
-            {isSaving ? "Saving" : "Save"}
-          </span>
-        </Button>
-
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={isExporting}
-          onClick={onExport}
-          title="Export annotated PDF"
-          className="h-7 gap-1.5 px-2.5 text-xs"
-        >
-          <Download size={16} strokeWidth={1.5} />
-          <span className="hidden sm:inline">
-            {isExporting ? "Exporting" : "Export"}
-          </span>
         </Button>
       </div>
     </div>

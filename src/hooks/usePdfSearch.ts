@@ -4,7 +4,10 @@ export interface SearchMatch {
     pageNumber: number;
 }
 
-export function usePdfSearch(pdfProxy: any, onJumpToPage: (page: number) => void) {
+export function usePdfSearch(
+    pdfProxy: any,
+    onJumpToPage: (page: number) => void,
+) {
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
     const [searchResults, setSearchResults] = useState<SearchMatch[]>([]);
@@ -14,14 +17,18 @@ export function usePdfSearch(pdfProxy: any, onJumpToPage: (page: number) => void
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const cacheRef = useRef<Map<number, string>>(new Map());
     const runIdRef = useRef(0);
+    const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
         cacheRef.current.clear();
         setSearchResults([]);
         setCurrentMatchIndex(0);
+        return () => {
+            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+        };
     }, [pdfProxy]);
 
-    const executeSearch = useCallback(
+    const runSearch = useCallback(
         async (queryText: string) => {
             const runId = ++runIdRef.current;
             const clean = queryText.toLowerCase().trim();
@@ -43,7 +50,10 @@ export function usePdfSearch(pdfProxy: any, onJumpToPage: (page: number) => void
                     if (pageText === undefined) {
                         const page = await pdfProxy.getPage(p);
                         const content = await page.getTextContent();
-                        pageText = content.items.map((i: any) => i.str || "").join(" ").toLowerCase();
+                        pageText = content.items
+                            .map((i: any) => i.str || "")
+                            .join(" ")
+                            .toLowerCase();
                         cacheRef.current.set(p, pageText);
                     }
 
@@ -67,10 +77,32 @@ export function usePdfSearch(pdfProxy: any, onJumpToPage: (page: number) => void
         [pdfProxy, onJumpToPage],
     );
 
+    const executeSearch = useCallback(
+        (queryText: string) => {
+            if (debounceTimerRef.current) {
+                clearTimeout(debounceTimerRef.current);
+            }
+            if (!queryText.trim()) {
+                runIdRef.current++;
+                setSearchResults([]);
+                setCurrentMatchIndex(0);
+                setIsSearching(false);
+                return;
+            }
+            setIsSearching(true);
+            debounceTimerRef.current = setTimeout(() => {
+                runSearch(queryText);
+            }, 160);
+        },
+        [runSearch],
+    );
+
     const stepMatch = useCallback(
         (delta: number) => {
             if (searchResults.length === 0) return;
-            const idx = (currentMatchIndex + delta + searchResults.length) % searchResults.length;
+            const idx =
+                (currentMatchIndex + delta + searchResults.length) %
+                searchResults.length;
             setCurrentMatchIndex(idx);
             onJumpToPage(searchResults[idx].pageNumber);
         },
@@ -83,6 +115,7 @@ export function usePdfSearch(pdfProxy: any, onJumpToPage: (page: number) => void
     }, []);
 
     const closeSearch = useCallback(() => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         runIdRef.current++;
         setIsSearchOpen(false);
         setIsSearching(false);

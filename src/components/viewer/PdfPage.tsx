@@ -16,11 +16,14 @@ import type { ToolType, UnderlineStyle } from "@/types/tools";
 interface PdfPageProps {
   pageNumber: number;
   zoomLevel: number;
+  estimatedWidth: number;
+  estimatedHeight: number;
   activeTool: ToolType;
   activeColor: string;
   activeStrokeWidth: number;
   activeUnderlineStyle: UnderlineStyle;
-  annotations: PdfAnnotation[];
+  pageAnnotations: PdfAnnotation[];
+  registerPageRef: (pageNumber: number, el: HTMLDivElement | null) => void;
   onAddAnnotation: (annot: PdfAnnotation) => void;
   onDeleteAnnotation: (id: string) => void;
   onNoteClick: (note: NoteAnnotation, anchor: { x: number; y: number }) => void;
@@ -41,18 +44,21 @@ const makeId = (prefix: string) =>
 export const PdfPage = memo(function PdfPage({
   pageNumber,
   zoomLevel,
+  estimatedWidth,
+  estimatedHeight,
   activeTool,
   activeColor,
   activeStrokeWidth,
   activeUnderlineStyle,
-  annotations,
+  pageAnnotations,
+  registerPageRef,
   onAddAnnotation,
   onDeleteAnnotation,
   onNoteClick,
   onAddFigureCrop,
   onDimensionsDiscovered,
 }: PdfPageProps) {
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const [inkDraft, setInkDraft] = useState<Point[] | null>(null);
   const [cropRect, setCropRect] = useState<{
     startX: number;
@@ -61,9 +67,25 @@ export const PdfPage = memo(function PdfPage({
     currY: number;
   } | null>(null);
 
-  const pageAnnotations = useMemo(
-    () => annotations.filter((a) => a.pageNumber === pageNumber),
-    [annotations, pageNumber],
+  const setRefs = useCallback(
+    (el: HTMLDivElement | null) => {
+      wrapperRef.current = el;
+      registerPageRef(pageNumber, el);
+    },
+    [pageNumber, registerPageRef],
+  );
+
+  const textMarkups = useMemo(
+    () => pageAnnotations.filter(isTextMarkupAnnotation),
+    [pageAnnotations],
+  );
+  const inkAnnotations = useMemo(
+    () => pageAnnotations.filter(isInkAnnotation),
+    [pageAnnotations],
+  );
+  const noteAnnotations = useMemo(
+    () => pageAnnotations.filter(isNoteAnnotation),
+    [pageAnnotations],
   );
 
   const normalizePoint = useCallback(
@@ -228,6 +250,14 @@ export const PdfPage = memo(function PdfPage({
     }
   };
 
+  const handlePageLoadSuccess = useCallback(
+    (page: any) => {
+      const vp = page.getViewport({ scale: 1 });
+      onDimensionsDiscovered(pageNumber, vp.width, vp.height);
+    },
+    [pageNumber, onDimensionsDiscovered],
+  );
+
   const needsDrawingLayer =
     activeTool === "freehand_write" ||
     activeTool === "area_select" ||
@@ -239,11 +269,16 @@ export const PdfPage = memo(function PdfPage({
       ? Math.min(window.devicePixelRatio || 1, 2)
       : 1;
 
+  const scale = zoomLevel / 100;
+  const minW = Math.round(estimatedWidth * scale);
+  const minH = Math.round(estimatedHeight * scale);
+
   return (
     <div
-      ref={wrapperRef}
+      ref={setRefs}
       data-page-number={pageNumber}
       onMouseUp={handleTextMarkup}
+      style={{ minWidth: minW, minHeight: minH }}
       className={cn(
         "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)]",
         activeTool === "freehand_write" && "cursor-crosshair",
@@ -253,19 +288,17 @@ export const PdfPage = memo(function PdfPage({
     >
       <Page
         pageNumber={pageNumber}
-        scale={zoomLevel / 100}
+        scale={scale}
         devicePixelRatio={dpr}
         renderAnnotationLayer
         renderTextLayer
-        onLoadSuccess={(page) => {
-          const vp = page.getViewport({ scale: 1 });
-          onDimensionsDiscovered(pageNumber, vp.width, vp.height);
-        }}
+        loading={null}
+        onLoadSuccess={handlePageLoadSuccess}
       />
 
       {/* Rendered text markups */}
       <div className="pointer-events-none absolute inset-0 z-10">
-        {pageAnnotations.filter(isTextMarkupAnnotation).map((annot) =>
+        {textMarkups.map((annot) =>
           annot.rectSegments.map((seg, idx) => {
             const style = {
               left: `${seg.x * 100}%`,
@@ -337,7 +370,7 @@ export const PdfPage = memo(function PdfPage({
         preserveAspectRatio="none"
         className="pointer-events-none absolute inset-0 z-20 h-full w-full"
       >
-        {pageAnnotations.filter(isInkAnnotation).map((annot) => {
+        {inkAnnotations.map((annot) => {
           const d = annot.points
             .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 1000} ${p.y * 1000}`)
             .join(" ");
@@ -403,7 +436,7 @@ export const PdfPage = memo(function PdfPage({
       )}
 
       {/* Note pins */}
-      {pageAnnotations.filter(isNoteAnnotation).map((note) => (
+      {noteAnnotations.map((note) => (
         <button
           key={note.id}
           type="button"
@@ -420,7 +453,7 @@ export const PdfPage = memo(function PdfPage({
           }}
           className="absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border border-black/15 text-black shadow-[var(--shadow-sm)] transition-transform duration-150 ease-[var(--ease-foliet)] hover:scale-105"
         >
-          <MessageSquare size={14} strokeWidth={1.75} />
+          <MessageSquare size={14} strokeWidth={1.5} />
         </button>
       ))}
     </div>
