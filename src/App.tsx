@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Toaster } from "sonner";
 import { Titlebar } from "@/components/Titlebar";
@@ -13,10 +13,10 @@ type PendingLeave = "home" | "close" | null;
 
 export function App() {
   const activeDoc = useDocumentStore((s) => s.activeDoc);
-  const isViewerOpen = useDocumentStore((s) => s.isViewerOpen);
   const isDirty = useDocumentStore((s) => s.isDirty);
   const closeDocument = useDocumentStore((s) => s.closeDocument);
   const isDark = useSystemStore((s) => s.isDark);
+  const forceClosingRef = useRef(false);
 
   const [pendingLeave, setPendingLeave] = useState<PendingLeave>(null);
 
@@ -25,6 +25,7 @@ export function App() {
     let unlisten: (() => void) | undefined;
 
     WindowService.onCloseRequested((event) => {
+      if (forceClosingRef.current) return;
       if (useDocumentStore.getState().isDirty) {
         event.preventDefault();
         setPendingLeave("close");
@@ -56,7 +57,7 @@ export function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-background font-sans text-foreground antialiased">
       <Titlebar onNavigateHome={requestHome} onRequestClose={requestClose} />
 
-      {!isViewerOpen ? <LibraryView /> : <ViewerView />}
+      {!activeDoc ? <LibraryView /> : <ViewerView />}
 
       <ConfirmModal
         open={pendingLeave !== null}
@@ -70,12 +71,18 @@ export function App() {
         onConfirm={() => {
           const action = pendingLeave;
           setPendingLeave(null);
-          if (action === "home") closeDocument();
-          else if (action === "close") WindowService.forceDestroy();
+          if (action === "home") {
+            closeDocument();
+          } else if (action === "close") {
+            forceClosingRef.current = true;
+            WindowService.close().catch(() => {
+              forceClosingRef.current = false;
+            });
+          }
         }}
       />
 
-      <Toaster theme={isDark ? "dark" : "light"} position="bottom-center" />
+      <Toaster theme={isDark ? "dark" : "light"} position="bottom-right" />
     </div>
   );
 }

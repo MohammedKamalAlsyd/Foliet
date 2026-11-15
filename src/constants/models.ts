@@ -4,6 +4,7 @@ import type {
     RagHyperparameters,
 } from "@/types/embedding";
 import type { LlmProvider, LlmModelPreset } from "@/types/chat";
+import { AiSettings } from "@/services/storage/settings";
 
 export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]> = {
     "local-rust": [
@@ -171,4 +172,16 @@ export const DEFAULT_RAG_HYPERPARAMETERS: RagHyperparameters = {
     topK: 5,
     maxTokens: 1024,
     vectorDimension: 384, // Matches GTE Small default
+};
+
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+    llmProvider: "openrouter",
+    llmModel: "anthropic/claude-3.5-sonnet",
+    apiKeys: {},
+    ollamaEndpoint: "http://localhost:11434",
+    embeddingProvider: "local-rust",
+    embeddingModel: "thenlper/gte-small",
+    embeddingApiKey: "",
+    hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
 };

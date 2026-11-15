@@ -1,5 +1,5 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { BinaryStorage } from "@/services/storage/binary";
+import { DocumentDatabase } from "@/services/storage/database";
 import type { CatalogItem } from "@/types/catalog";
 
 export function normalizePath(p?: string): string {
@@ -128,13 +128,13 @@ export class DocumentCatalogStorage {
         const current = await this.getDocuments();
         const filtered = current.filter((d) => d.id !== docId);
         await this.saveDocuments(filtered);
-        await BinaryStorage.deleteDocumentData(docId);
+        await DocumentDatabase.deleteDocumentData(docId);
     }
 
     public static async clearAll(): Promise<void> {
         await this.store.set("documents", []);
         await this.store.set("collections", []);
         await this.store.save();
-        await BinaryStorage.clearAll();
+        await DocumentDatabase.clearAll();
     }
 }

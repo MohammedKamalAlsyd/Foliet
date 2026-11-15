@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback } from "react";
 
 interface HistoryState<T> {
     past: { value: T; rev: number }[];
@@ -7,42 +7,9 @@ interface HistoryState<T> {
     maxRev: number;
     future: { value: T; rev: number }[];
     savedRev: number;
-    savedValue: T;
 }
 
-function deepEqual(a: unknown, b: unknown): boolean {
-    if (Object.is(a, b)) return true;
-    if (typeof a !== typeof b || a === null || b === null) return false;
-
-    if (Array.isArray(a) && Array.isArray(b)) {
-        if (a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++) {
-            if (!deepEqual(a[i], b[i])) return false;
-        }
-        return true;
-    }
-
-    if (typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
-        const objA = a as Record<string, unknown>;
-        const objB = b as Record<string, unknown>;
-        const keysA = Object.keys(objA);
-        const keysB = Object.keys(objB);
-        if (keysA.length !== keysB.length) return false;
-        for (const key of keysA) {
-            if (!Object.prototype.hasOwnProperty.call(objB, key)) return false;
-            if (!deepEqual(objA[key], objB[key])) return false;
-        }
-        return true;
-    }
-
-    return false;
-}
-
-export function useUndoRedo<T>(
-    initialPresent: T,
-    maxDepth = 50,
-    isEqual: (a: T, b: T) => boolean = deepEqual,
-) {
+export function useUndoRedo<T>(initialPresent: T, maxDepth = 50) {
     const [history, setHistory] = useState<HistoryState<T>>({
         past: [],
         present: initialPresent,
@@ -50,7 +17,6 @@ export function useUndoRedo<T>(
         maxRev: 0,
         future: [],
         savedRev: 0,
-        savedValue: initialPresent,
     });
 
     const set = useCallback(
@@ -60,18 +26,20 @@ export function useUndoRedo<T>(
                     typeof nextState === "function"
                         ? (nextState as (prev: T) => T)(curr.present)
                         : nextState;
-                if (resolved === curr.present || isEqual(resolved, curr.present)) {
-                    return curr;
-                }
+                if (Object.is(resolved, curr.present)) return curr;
 
                 const nextRev = curr.maxRev + 1;
-                const nextPast = [...curr.past, { value: curr.present, rev: curr.rev }];
+                const nextPast =
+                    curr.past.length >= maxDepth
+                        ? [
+                            ...curr.past.slice(curr.past.length - maxDepth + 1),
+                            { value: curr.present, rev: curr.rev },
+                        ]
+                        : [...curr.past, { value: curr.present, rev: curr.rev }];
+
                 return {
                     ...curr,
-                    past:
-                        nextPast.length > maxDepth
-                            ? nextPast.slice(nextPast.length - maxDepth)
-                            : nextPast,
+                    past: nextPast,
                     present: resolved,
                     rev: nextRev,
                     maxRev: nextRev,
@@ -79,7 +47,7 @@ export function useUndoRedo<T>(
                 };
             });
         },
-        [maxDepth, isEqual],
+        [maxDepth],
     );
 
     const undo = useCallback(() => {
@@ -120,23 +88,15 @@ export function useUndoRedo<T>(
                 maxRev: rev,
                 future: [],
                 savedRev: rev,
-                savedValue: newState,
             };
         });
     }, []);
 
     const markSaved = useCallback(() => {
         setHistory((curr) =>
-            curr.savedRev === curr.rev && curr.savedValue === curr.present
-                ? curr
-                : { ...curr, savedRev: curr.rev, savedValue: curr.present },
+            curr.savedRev === curr.rev ? curr : { ...curr, savedRev: curr.rev },
         );
     }, []);
-
-    const isDirty = useMemo(() => {
-        if (history.rev === history.savedRev) return false;
-        return !isEqual(history.present, history.savedValue);
-    }, [history.rev, history.savedRev, history.present, history.savedValue, isEqual]);
 
     return {
         state: history.present,
@@ -146,7 +106,7 @@ export function useUndoRedo<T>(
         canUndo: history.past.length > 0,
         canRedo: history.future.length > 0,
         reset,
-        isDirty,
+        isDirty: history.rev !== history.savedRev,
         markSaved,
     };
 }

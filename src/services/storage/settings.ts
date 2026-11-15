@@ -1,11 +1,25 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { ToolPreset } from "@/types/tools";
 import { DEFAULT_TOOL_PRESETS } from "@/constants/tools";
+import { DEFAULT_RAG_HYPERPARAMETERS, DEFAULT_AI_SETTINGS } from "@/constants/models";
+import type { LlmProvider } from "@/types/chat";
+import type { EmbeddingProvider, RagHyperparameters } from "@/types/embedding";
 
 export interface UserPreferences {
     theme: "dark" | "light";
     defaultZoom: number;
     sidebarOpen: boolean;
+}
+
+export interface AiSettings {
+    llmProvider: LlmProvider;
+    llmModel: string;
+    apiKeys: Partial<Record<LlmProvider, string>>;
+    ollamaEndpoint: string;
+    embeddingProvider: EmbeddingProvider;
+    embeddingModel: string;
+    embeddingApiKey: string;
+    hyperparameters: RagHyperparameters;
 }
 
 const DEFAULT_PREFERENCES: UserPreferences = {
@@ -85,5 +99,66 @@ export class SettingsStorage {
     public static async resetToolPresets(): Promise<ToolPreset[]> {
         await this.saveToolPresets(DEFAULT_TOOL_PRESETS);
         return DEFAULT_TOOL_PRESETS;
+    }
+
+    // =========================================================================
+    // AI & Embedding Settings
+    // =========================================================================
+
+    public static async getAiSettings(): Promise<AiSettings> {
+        try {
+            const saved = await this.store.get<Partial<AiSettings>>("ai_settings");
+            if (saved) {
+                return {
+                    ...DEFAULT_AI_SETTINGS,
+                    ...saved,
+                    apiKeys: {
+                        ...DEFAULT_AI_SETTINGS.apiKeys,
+                        ...saved.apiKeys,
+                    },
+                    hyperparameters: {
+                        ...DEFAULT_AI_SETTINGS.hyperparameters,
+                        ...saved.hyperparameters,
+                    },
+                };
+            }
+        } catch (err) {
+            console.warn("SettingsStorage: Failed to read AI settings:", err);
+        }
+        return {
+            ...DEFAULT_AI_SETTINGS,
+            apiKeys: {},
+            hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
+        };
+    }
+
+    public static async saveAiSettings(
+        patch: Partial<AiSettings>
+    ): Promise<AiSettings> {
+        const current = await this.getAiSettings();
+        const next: AiSettings = {
+            ...current,
+            ...patch,
+            apiKeys: patch.apiKeys
+                ? { ...current.apiKeys, ...patch.apiKeys }
+                : current.apiKeys,
+            hyperparameters: patch.hyperparameters
+                ? { ...current.hyperparameters, ...patch.hyperparameters }
+                : current.hyperparameters,
+        };
+        await this.store.set("ai_settings", next);
+        await this.store.save();
+        return next;
+    }
+
+    public static async resetAiSettings(): Promise<AiSettings> {
+        const defaults: AiSettings = {
+            ...DEFAULT_AI_SETTINGS,
+            apiKeys: {},
+            hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
+        };
+        await this.store.set("ai_settings", defaults);
+        await this.store.save();
+        return defaults;
     }
 }

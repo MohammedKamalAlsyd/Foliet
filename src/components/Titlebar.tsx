@@ -34,7 +34,6 @@ export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
   const toggleTheme = useSystemStore((s) => s.toggleTheme);
 
   const activeDoc = useDocumentStore((s) => s.activeDoc);
-  const isViewerOpen = useDocumentStore((s) => s.isViewerOpen);
   const isDirty = useDocumentStore((s) => s.isDirty);
   const isSaving = useDocumentStore((s) => s.isSaving);
   const closeDocument = useDocumentStore((s) => s.closeDocument);
@@ -191,7 +190,7 @@ export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
         )}
 
         <div className="no-drag flex items-center">
-          {isViewerOpen ? (
+          {activeDoc ? (
             <Button
               type="button"
               variant="ghost"
@@ -216,7 +215,7 @@ export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
 
       {/* Center: Context / Active Document & Save Status */}
       <div className="pointer-events-none flex min-w-0 max-w-md items-center gap-2 px-2">
-        {isViewerOpen && (
+        {activeDoc && (
           <FileText
             size={16}
             strokeWidth={1.5}
@@ -224,10 +223,10 @@ export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
           />
         )}
         <span className="truncate font-sans text-xs font-medium text-foreground">
-          {isViewerOpen ? activeDoc?.title || "Untitled document" : "Library"}
+          {activeDoc ? activeDoc.title || "Untitled document" : "Library"}
         </span>
 
-        {isViewerOpen && (
+        {activeDoc && (
           <>
             <Separator orientation="vertical" className="h-4" />
             <div className="flex shrink-0 items-center font-mono text-xs tabular-nums">

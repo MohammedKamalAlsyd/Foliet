@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PdfService } from "@/services/pdf";
-import { BinaryStorage } from "@/services/storage/binary";
+import { DocumentDatabase } from "@/services/storage/database";
 import {
     DocumentCatalogStorage,
     deduplicateDocuments,
@@ -115,7 +115,7 @@ export function useLibraryCatalog(activeCollection: string | null) {
                     extractedAnnotations: result.extractedAnnotations,
                 };
 
-                openDocument(runtimeDoc, null);
+                openDocument(runtimeDoc);
 
                 if (!result.extractedAnnotations) {
                     PdfService.extractAnnotations(result.filePath)
@@ -155,11 +155,11 @@ export function useLibraryCatalog(activeCollection: string | null) {
 
     const forgetDoc = useCallback(async (docId: string) => {
         try {
-            const annots = await BinaryStorage.getAnnotations(docId);
+            const annots = await DocumentDatabase.getAnnotations(docId);
             await Promise.all(
                 annots
                     .filter((a) => a.toolType === "area_select")
-                    .map((a) => BinaryStorage.deleteFigureCrop(a.id)),
+                    .map((a) => DocumentDatabase.deleteFigureCrop(a.id)),
             );
             await DocumentCatalogStorage.removeDocument(docId);
             setDocuments((prev) => prev.filter((d) => d.id !== docId));

@@ -1,36 +1,40 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-export interface SearchMatch {
-    pageNumber: number;
-}
-
 export function usePdfSearch(
     pdfProxy: any,
     onJumpToPage: (page: number) => void,
 ) {
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<SearchMatch[]>([]);
+    const [searchResults, setSearchResults] = useState<number[]>([]);
     const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
     const [isSearching, setIsSearching] = useState(false);
 
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const cacheRef = useRef<Map<number, string>>(new Map());
     const runIdRef = useRef(0);
-    const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const cancelPending = useCallback(() => {
+        if (debounceRef.current) {
+            clearTimeout(debounceRef.current);
+            debounceRef.current = null;
+        }
+        runIdRef.current++;
+    }, []);
 
     useEffect(() => {
+        cancelPending();
         cacheRef.current.clear();
         setSearchResults([]);
         setCurrentMatchIndex(0);
-        return () => {
-            if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        };
-    }, [pdfProxy]);
+        setIsSearching(false);
+        return cancelPending;
+    }, [pdfProxy, cancelPending]);
 
-    const runSearch = useCallback(
-        async (queryText: string) => {
-            const runId = ++runIdRef.current;
+    const executeSearch = useCallback(
+        (queryText: string) => {
+            cancelPending();
             const clean = queryText.toLowerCase().trim();
             if (!pdfProxy || !clean) {
                 setSearchResults([]);
@@ -39,62 +43,46 @@ export function usePdfSearch(
                 return;
             }
 
+            const runId = runIdRef.current;
             setIsSearching(true);
-            const matches: SearchMatch[] = [];
 
-            try {
-                for (let p = 1; p <= pdfProxy.numPages; p++) {
+            debounceRef.current = setTimeout(async () => {
+                const matches: number[] = [];
+                try {
+                    for (let p = 1; p <= pdfProxy.numPages; p++) {
+                        if (runIdRef.current !== runId) return;
+
+                        let pageText = cacheRef.current.get(p);
+                        if (pageText === undefined) {
+                            const page = await pdfProxy.getPage(p);
+                            const content = await page.getTextContent();
+                            const extracted: string = (content.items as Array<{ str?: string }>)
+                                .map((i) => i.str ?? "")
+                                .join(" ")
+                                .toLowerCase();
+                            cacheRef.current.set(p, extracted);
+                            pageText = extracted;
+                        }
+
+                        let pos = pageText.indexOf(clean);
+                        while (pos !== -1) {
+                            matches.push(p);
+                            pos = pageText.indexOf(clean, pos + clean.length);
+                        }
+                    }
+
                     if (runIdRef.current !== runId) return;
-
-                    let pageText = cacheRef.current.get(p);
-                    if (pageText === undefined) {
-                        const page = await pdfProxy.getPage(p);
-                        const content = await page.getTextContent();
-                        pageText = content.items
-                            .map((i: any) => i.str || "")
-                            .join(" ")
-                            .toLowerCase();
-                        cacheRef.current.set(p, pageText);
-                    }
-
-                    let pos = pageText.indexOf(clean);
-                    while (pos !== -1) {
-                        matches.push({ pageNumber: p });
-                        pos = pageText.indexOf(clean, pos + clean.length);
-                    }
+                    setSearchResults(matches);
+                    setCurrentMatchIndex(0);
+                    if (matches.length > 0) onJumpToPage(matches[0]);
+                } catch (err) {
+                    console.warn("Search error:", err);
+                } finally {
+                    if (runIdRef.current === runId) setIsSearching(false);
                 }
-
-                if (runIdRef.current !== runId) return;
-                setSearchResults(matches);
-                setCurrentMatchIndex(0);
-                if (matches.length > 0) onJumpToPage(matches[0].pageNumber);
-            } catch (err) {
-                console.warn("Search error:", err);
-            } finally {
-                if (runIdRef.current === runId) setIsSearching(false);
-            }
-        },
-        [pdfProxy, onJumpToPage],
-    );
-
-    const executeSearch = useCallback(
-        (queryText: string) => {
-            if (debounceTimerRef.current) {
-                clearTimeout(debounceTimerRef.current);
-            }
-            if (!queryText.trim()) {
-                runIdRef.current++;
-                setSearchResults([]);
-                setCurrentMatchIndex(0);
-                setIsSearching(false);
-                return;
-            }
-            setIsSearching(true);
-            debounceTimerRef.current = setTimeout(() => {
-                runSearch(queryText);
             }, 160);
         },
-        [runSearch],
+        [pdfProxy, onJumpToPage, cancelPending],
     );
 
     const stepMatch = useCallback(
@@ -104,10 +92,13 @@ export function usePdfSearch(
                 (currentMatchIndex + delta + searchResults.length) %
                 searchResults.length;
             setCurrentMatchIndex(idx);
-            onJumpToPage(searchResults[idx].pageNumber);
+            onJumpToPage(searchResults[idx]);
         },
         [searchResults, currentMatchIndex, onJumpToPage],
     );
+
+    const handleSearchNext = useCallback(() => stepMatch(1), [stepMatch]);
+    const handleSearchPrev = useCallback(() => stepMatch(-1), [stepMatch]);
 
     const openSearch = useCallback(() => {
         setIsSearchOpen(true);
@@ -115,11 +106,10 @@ export function usePdfSearch(
     }, []);
 
     const closeSearch = useCallback(() => {
-        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
-        runIdRef.current++;
+        cancelPending();
         setIsSearchOpen(false);
         setIsSearching(false);
-    }, []);
+    }, [cancelPending]);
 
     return {
         isSearchOpen,
@@ -130,8 +120,8 @@ export function usePdfSearch(
         isSearching,
         searchInputRef,
         executeSearch,
-        handleSearchNext: () => stepMatch(1),
-        handleSearchPrev: () => stepMatch(-1),
+        handleSearchNext,
+        handleSearchPrev,
         openSearch,
         closeSearch,
     };

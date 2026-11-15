@@ -28,10 +28,6 @@ export class WindowService {
         await this.appWindow?.close();
     }
 
-    public static async forceDestroy(): Promise<void> {
-        await this.appWindow?.destroy();
-    }
-
     public static async onCloseRequested(
         callback: (event: CloseRequestedEvent) => void,
     ): Promise<() => void> {

@@ -2,15 +2,25 @@
   position: relative;
 }
 
+.textLayer ::selection,
 .react-pdf__Page__textContent ::selection {
   background-color: var(--selection-bg);
+  color: transparent;
 }
 
-.react-pdf__Page__annotations.annotationLayer {
+.annotationLayer,
+.annotationLayer section,
+.annotationLayer a {
   pointer-events: none;
 }
 
-.ctrl-active .react-pdf__Page__annotations.annotationLayer a {
+.ctrl-active .annotationLayer .linkAnnotation a {
   pointer-events: auto;
   cursor: pointer;
+}
+
+.ctrl-active .annotationLayer .linkAnnotation a:hover {
+  outline: 1.5px solid var(--accent-brand);
+  background-color: var(--selection-bg);
+  border-radius: 2px;
 }
