@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PdfService } from "@/services/pdf";
-import { DocumentDatabase } from "@/services/storage/database";
 import {
     DocumentCatalogStorage,
     deduplicateDocuments,
     normalizeCollections,
     normalizePath,
 } from "@/services/storage/catalog";
+import { DocumentDatabase } from "@/services/storage/database";
 import { useDocumentStore } from "@/stores/documentStore";
 import type { CatalogItem } from "@/types/catalog";
-import type { DocumentItem } from "@/types/document";
 
 const stripByIdentity = (
     list: CatalogItem[],
@@ -84,7 +83,7 @@ export function useLibraryCatalog(activeCollection: string | null) {
                     fileName: result.fileName,
                     filePath: result.filePath,
                     fileSize: result.fileSize,
-                    pageCount: result.numPages,
+                    pageCount: existing?.pageCount || result.numPages,
                     lastPage: existing?.lastPage ?? 1,
                     scrollOffset: existing?.scrollOffset ?? 0,
                     zoom: existing?.zoom ?? 100,
@@ -104,25 +103,32 @@ export function useLibraryCatalog(activeCollection: string | null) {
                 setDocuments(nextDocs);
                 DocumentCatalogStorage.saveDocuments(nextDocs).catch(() => { });
 
-                const runtimeDoc: DocumentItem = {
+                openDocument({
                     id: result.docId,
                     title,
-                    pages: result.numPages,
+                    pages: catalogEntry.pageCount,
                     filePath: result.filePath,
                     lastPage: catalogEntry.lastPage,
                     scrollOffset: catalogEntry.scrollOffset,
                     zoom: catalogEntry.zoom,
                     extractedAnnotations: result.extractedAnnotations,
-                };
+                });
 
-                openDocument(runtimeDoc);
-
+                // Skip heavy Rust annotation extraction if SQLite already has annotations,
+                // and defer slightly so pdf.js renders page 1 uncontended.
                 if (!result.extractedAnnotations) {
-                    PdfService.extractAnnotations(result.filePath)
-                        .then((annots) => {
-                            if (annots && annots.length > 0) {
-                                setExtractedAnnotations(result.docId, annots);
-                            }
+                    DocumentDatabase.getAnnotations(result.docId)
+                        .then((saved) => {
+                            if (saved.length > 0) return;
+                            setTimeout(() => {
+                                PdfService.extractAnnotations(result.filePath)
+                                    .then((annots) => {
+                                        if (annots?.length) {
+                                            setExtractedAnnotations(result.docId, annots);
+                                        }
+                                    })
+                                    .catch(() => { });
+                            }, 400);
                         })
                         .catch(() => { });
                 }

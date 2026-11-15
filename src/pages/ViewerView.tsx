@@ -1,7 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Document, pdfjs } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { NoteEditorPortal } from "@/components/viewer/NoteEditorPortal";
 import { PdfPage } from "@/components/viewer/PdfPage";
@@ -10,18 +16,13 @@ import { PdfToolbar } from "@/components/viewer/PdfToolbar";
 import { SearchOverlay } from "@/components/viewer/SearchOverlay";
 import { ViewerHeader } from "@/components/viewer/ViewerHeader";
 import { usePdfSearch } from "@/hooks/usePdfSearch";
-import { usePdfVirtualizer } from "@/hooks/usePdfVirtualizer";
 import { useToolManager } from "@/hooks/useToolManager";
 import { useUndoRedo } from "@/hooks/useUndoRedo";
 import { PDF_DOCUMENT_OPTIONS, PdfService } from "@/services/pdf";
-import { BinaryStorage } from "@/services/storage/binary";
 import { DocumentCatalogStorage } from "@/services/storage/catalog";
+import { DocumentDatabase } from "@/services/storage/database";
 import { SettingsStorage } from "@/services/storage/settings";
-import {
-  getActivePdfBuffer,
-  getActivePdfSource,
-  useDocumentStore,
-} from "@/stores/documentStore";
+import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
 import { useSystemStore } from "@/stores/systemStore";
 import {
   type BurnableAnnotation,
@@ -29,6 +30,7 @@ import {
   type NoteAnnotation,
   type PdfAnnotation,
   isCropAnnotation,
+  isNoteAnnotation,
 } from "@/types/annotations";
 import type {
   BookmarkItem,
@@ -42,36 +44,43 @@ import "@/styles/pdf-viewer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
-const EMPTY_PAGE_ANNOTATIONS: PdfAnnotation[] = [];
+const EMPTY_ANNOTS: PdfAnnotation[] = [];
+const MAX_RENDERED_PAGES = 18;
+const DEFAULT_DIM: PageDimensions = { width: 612, height: 792 };
 
 const sameBookmarks = (a: BookmarkItem[], b: BookmarkItem[]) =>
   a.length === b.length &&
   a.every(
-    (item, idx) =>
-      item.id === b[idx].id &&
-      item.pageNumber === b[idx].pageNumber &&
-      item.title === b[idx].title,
+    (x, i) =>
+      x.id === b[i].id &&
+      x.pageNumber === b[i].pageNumber &&
+      x.title === b[i].title,
   );
 
 const sameCrops = (a: CropAnnotation[], b: CropAnnotation[]) =>
-  a.length === b.length && a.every((item, idx) => item.id === b[idx].id);
+  a.length === b.length && a.every((x, i) => x.id === b[i].id);
 
 export function ViewerView() {
   const activeDoc = useDocumentStore((s) => s.activeDoc);
   const setDirtySource = useDocumentStore((s) => s.setDirtySource);
   const clearDirty = useDocumentStore((s) => s.clearDirty);
   const setDocPageCount = useDocumentStore((s) => s.setDocPageCount);
-  const setSaveExecutor = useDocumentStore((s) => s.setSaveExecutor);
-  const saveDocument = useDocumentStore((s) => s.saveDocument);
   const shortcutModifier = useSystemStore((s) => s.shortcutModifier);
 
   const [pdfProxy, setPdfProxy] = useState<any | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [currentPage, setCurrentPage] = useState(activeDoc?.lastPage || 1);
-  const [totalPages, setTotalPages] = useState(
+  const [currentPage, setCurrentPage] = useState<number>(() =>
+    Math.max(1, activeDoc?.lastPage || 1),
+  );
+  const [totalPages, setTotalPages] = useState<number>(() =>
     Math.max(1, activeDoc?.pages || 1),
   );
-  const [zoomLevel, setZoomLevel] = useState(activeDoc?.zoom || 100);
+  const [zoomLevel, setZoomLevel] = useState<number>(
+    () => activeDoc?.zoom || 100,
+  );
+  const [renderZoom, setRenderZoom] = useState<number>(
+    () => activeDoc?.zoom || 100,
+  );
   const [isCtrlHeld, setIsCtrlHeld] = useState(false);
 
   const [outline, setOutline] = useState<PdfOutlineNode[]>([]);
@@ -82,7 +91,12 @@ export function ViewerView() {
     Record<number, PageDimensions>
   >({});
 
-  const [editingNote, setEditingNote] = useState<NoteAnnotation | null>(null);
+  const [renderedPages, setRenderedPages] = useState<Set<number>>(() => {
+    const start = Math.max(1, activeDoc?.lastPage || 1);
+    return new Set([Math.max(1, start - 1), start, start + 1]);
+  });
+
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteAnchorPos, setNoteAnchorPos] = useState<{
     x: number;
     y: number;
@@ -91,7 +105,21 @@ export function ViewerView() {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pagesContainerRef = useRef<HTMLDivElement | null>(null);
   const pageRefsMap = useRef<Map<number, HTMLElement>>(new Map());
+  const pageRefCallbacksRef = useRef<
+    Map<number, (el: HTMLElement | null) => void>
+  >(new Map());
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const visiblePagesRef = useRef<Set<number>>(new Set());
   const programmaticScrollRef = useRef(false);
+  const pendingRestorePageRef = useRef<number | null>(null);
+  const restoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevZoomRef = useRef<number>(activeDoc?.zoom || 100);
+  const lastScrollTopRef = useRef(0);
+  const scrollDirectionRef = useRef<1 | -1>(1);
+  const isJumpingScrollRef = useRef(false);
+  const scrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const seededDocRef = useRef<string | null>(null);
   const hasEditedAnnotationsRef = useRef(false);
   const savedBookmarksRef = useRef<BookmarkItem[]>([]);
@@ -99,7 +127,6 @@ export function ViewerView() {
   const prevPageAnnotsRef = useRef<Map<number, PdfAnnotation[]>>(new Map());
 
   const toolManager = useToolManager();
-  const { renderedPages } = usePdfVirtualizer(currentPage, totalPages, 2);
   const {
     state: annotations,
     set: setAnnotations,
@@ -112,26 +139,90 @@ export function ViewerView() {
     markSaved,
   } = useUndoRedo<PdfAnnotation[]>([]);
 
-  const pdfSource = useMemo(() => getActivePdfSource(activeDoc), [activeDoc]);
+  const pdfSource = useMemo(
+    () => getActivePdfSource(activeDoc),
+    [activeDoc?.filePath],
+  );
+  const noopRegisterPageRef = useCallback(() => {}, []);
 
+  // Stable wrapper refs so IntersectionObserver never loses or thrashes observed nodes
   const registerPageRef = useCallback(
     (pageNumber: number, el: HTMLElement | null) => {
-      if (el) pageRefsMap.current.set(pageNumber, el);
-      else pageRefsMap.current.delete(pageNumber);
+      const prev = pageRefsMap.current.get(pageNumber);
+      if (prev === el) return;
+      if (prev) {
+        observerRef.current?.unobserve(prev);
+      }
+      if (el) {
+        pageRefsMap.current.set(pageNumber, el);
+        observerRef.current?.observe(el);
+      } else {
+        pageRefsMap.current.delete(pageNumber);
+      }
     },
     [],
   );
 
-  // Per-page annotation slices with structural sharing so editing one page
-  // never invalidates React.memo on sibling pages.
+  const getPageRefCallback = useCallback(
+    (pageNumber: number) => {
+      let cb = pageRefCallbacksRef.current.get(pageNumber);
+      if (!cb) {
+        cb = (el: HTMLElement | null) => registerPageRef(pageNumber, el);
+        pageRefCallbacksRef.current.set(pageNumber, cb);
+      }
+      return cb;
+    },
+    [registerPageRef],
+  );
+
+  const syncRenderedPages = useCallback(
+    (anchorPage: number, maxPages: number) => {
+      const dir = scrollDirectionRef.current;
+      const startOffset = dir === 1 ? -2 : -4;
+      const endOffset = dir === 1 ? 4 : 2;
+
+      setRenderedPages((prev) => {
+        const next = new Set<number>(prev);
+        for (const p of visiblePagesRef.current) {
+          if (p >= 1 && p <= maxPages) next.add(p);
+        }
+        for (let d = startOffset; d <= endOffset; d++) {
+          const p = anchorPage + d;
+          if (p >= 1 && p <= maxPages) next.add(p);
+        }
+
+        const candidate =
+          next.size > MAX_RENDERED_PAGES
+            ? new Set(
+                Array.from(next)
+                  .filter((p) => p >= 1 && p <= maxPages)
+                  .sort(
+                    (a, b) =>
+                      Math.abs(a - anchorPage) - Math.abs(b - anchorPage),
+                  )
+                  .slice(0, MAX_RENDERED_PAGES),
+              )
+            : next;
+
+        if (
+          candidate.size === prev.size &&
+          Array.from(candidate).every((p) => prev.has(p))
+        ) {
+          return prev;
+        }
+        return candidate;
+      });
+    },
+    [],
+  );
+
   const annotationsByPage = useMemo(() => {
     const grouped = new Map<number, PdfAnnotation[]>();
-    for (const annot of annotations) {
-      const list = grouped.get(annot.pageNumber);
-      if (list) list.push(annot);
-      else grouped.set(annot.pageNumber, [annot]);
+    for (const a of annotations) {
+      const list = grouped.get(a.pageNumber);
+      if (list) list.push(a);
+      else grouped.set(a.pageNumber, [a]);
     }
-
     const nextCache = new Map<number, PdfAnnotation[]>();
     for (const [pageNum, list] of grouped) {
       const prev = prevPageAnnotsRef.current.get(pageNum);
@@ -148,6 +239,12 @@ export function ViewerView() {
     prevPageAnnotsRef.current = nextCache;
     return nextCache;
   }, [annotations]);
+
+  const editingNote = useMemo(() => {
+    if (!editingNoteId) return null;
+    const found = annotations.find((a) => a.id === editingNoteId);
+    return found && isNoteAnnotation(found) ? found : null;
+  }, [annotations, editingNoteId]);
 
   useEffect(() => {
     setDirtySource("annotations", isAnnotDirty);
@@ -178,40 +275,112 @@ export function ViewerView() {
     });
   }, []);
 
+  // Debounce live canvas re-render during rapid zooming so CSS-scale carries 60fps feedback
+  useEffect(() => {
+    if (renderZoom === zoomLevel) return;
+    const timer = setTimeout(() => {
+      setRenderZoom(zoomLevel);
+    }, 140);
+    return () => clearTimeout(timer);
+  }, [zoomLevel, renderZoom]);
+
+  // Keep viewport reading center anchored proportionally when zoom changes
+  useLayoutEffect(() => {
+    const prevZoom = prevZoomRef.current;
+    prevZoomRef.current = zoomLevel;
+    if (
+      prevZoom === zoomLevel ||
+      !scrollRef.current ||
+      pendingRestorePageRef.current !== null
+    ) {
+      return;
+    }
+    const container = scrollRef.current;
+    const ratio = zoomLevel / prevZoom;
+    const centerY = container.scrollTop + container.clientHeight / 2;
+    programmaticScrollRef.current = true;
+    container.scrollTop = Math.max(
+      0,
+      centerY * ratio - container.clientHeight / 2,
+    );
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false;
+    });
+  }, [zoomLevel]);
+
   const jumpToPage = useCallback(
     (pageNum: number) => {
       const target = Math.min(totalPages, Math.max(1, pageNum));
       const container = scrollRef.current;
+      if (restoreTimerRef.current) {
+        clearTimeout(restoreTimerRef.current);
+      }
       programmaticScrollRef.current = true;
       setCurrentPage(target);
+      syncRenderedPages(target, totalPages);
 
       requestAnimationFrame(() => {
         const el = pageRefsMap.current.get(target);
         if (container && el) {
-          const top = Math.max(0, el.offsetTop - 24);
-          container.scrollTo({ top, behavior: "auto" });
+          const topDelta =
+            el.getBoundingClientRect().top -
+            container.getBoundingClientRect().top;
+          container.scrollTo({
+            top: Math.max(0, container.scrollTop + topDelta - 24),
+            behavior: "auto",
+          });
         }
-        requestAnimationFrame(() => {
+        restoreTimerRef.current = setTimeout(() => {
           programmaticScrollRef.current = false;
-        });
+          pendingRestorePageRef.current = null;
+        }, 60);
       });
     },
-    [totalPages],
+    [totalPages, syncRenderedPages],
   );
 
   const search = usePdfSearch(pdfProxy, jumpToPage);
 
-  // Load saved annotations & bookmarks once per docId
+  // Reset per-document state & load saved annotations/bookmarks
   useEffect(() => {
     if (!activeDoc?.id) return;
     const docId = activeDoc.id;
+    const initialPage = Math.max(1, activeDoc.lastPage || 1);
+    const initialPages = Math.max(1, activeDoc.pages || 1);
+    const initialZoom = activeDoc.zoom || 100;
     let active = true;
+
+    if (restoreTimerRef.current) {
+      clearTimeout(restoreTimerRef.current);
+      restoreTimerRef.current = null;
+    }
+    programmaticScrollRef.current = false;
+    setPdfProxy(null);
+    setOutline([]);
+    setPageLabels([]);
+    setPageDimensions({});
+    setEditingNoteId(null);
+    setNoteAnchorPos(null);
+    setTotalPages(initialPages);
+    setZoomLevel(initialZoom);
+    setRenderZoom(initialZoom);
+    prevZoomRef.current = initialZoom;
+    setCurrentPage(initialPage);
+    setRenderedPages(
+      new Set(
+        [initialPage - 1, initialPage, initialPage + 1, initialPage + 2].filter(
+          (p) => p >= 1 && p <= initialPages,
+        ),
+      ),
+    );
+    visiblePagesRef.current.clear();
+    pendingRestorePageRef.current = initialPage > 1 ? initialPage : null;
     seededDocRef.current = null;
     hasEditedAnnotationsRef.current = false;
 
     Promise.all([
-      BinaryStorage.getAnnotations(docId),
-      BinaryStorage.getBookmarks(docId),
+      DocumentDatabase.getAnnotations(docId),
+      DocumentDatabase.getBookmarks(docId),
     ])
       .then(([savedAnnots, savedBookmarks]) => {
         if (!active) return;
@@ -237,6 +406,10 @@ export function ViewerView() {
 
     return () => {
       active = false;
+      if (restoreTimerRef.current) {
+        clearTimeout(restoreTimerRef.current);
+        restoreTimerRef.current = null;
+      }
     };
   }, [activeDoc?.id, resetAnnotations, clearDirty]);
 
@@ -262,21 +435,43 @@ export function ViewerView() {
     resetAnnotations,
   ]);
 
-  // Persist reading state back to library catalog (debounced 1s to avoid disk I/O during paging)
+  // Track latest reading state for debounced + guaranteed unmount/switch flush
+  const readingStateRef = useRef({
+    docId: "",
+    lastPage: 1,
+    zoom: 100,
+    pageCount: 1,
+    annotationCount: 0,
+    ready: false,
+  });
+
+  readingStateRef.current = {
+    docId: activeDoc?.id ?? "",
+    lastPage: currentPage,
+    zoom: zoomLevel,
+    pageCount: totalPages,
+    annotationCount: annotations.length + cropAnnotations.length,
+    ready: Boolean(pdfProxy) && pendingRestorePageRef.current === null,
+  };
+
   useEffect(() => {
-    if (!activeDoc?.id) return;
-    const docId = activeDoc.id;
+    if (!activeDoc?.id || !pdfProxy || pendingRestorePageRef.current !== null) {
+      return;
+    }
+    const { docId, lastPage, zoom, pageCount, annotationCount } =
+      readingStateRef.current;
     const timer = setTimeout(() => {
       DocumentCatalogStorage.updateDocument(docId, {
-        lastPage: currentPage,
-        zoom: zoomLevel,
-        pageCount: totalPages,
-        annotationCount: annotations.length + cropAnnotations.length,
+        lastPage,
+        zoom,
+        pageCount,
+        annotationCount,
       }).catch(() => {});
-    }, 1000);
+    }, 600);
     return () => clearTimeout(timer);
   }, [
     activeDoc?.id,
+    pdfProxy,
     currentPage,
     zoomLevel,
     totalPages,
@@ -284,70 +479,213 @@ export function ViewerView() {
     cropAnnotations.length,
   ]);
 
-  // Fast O(log N) binary-search scroll spy over ordered page children
+  // Flush reading position immediately on close / doc change / window unload
+  useEffect(() => {
+    const flush = () => {
+      const s = readingStateRef.current;
+      if (s.docId && s.ready) {
+        DocumentCatalogStorage.updateDocument(s.docId, {
+          lastPage: s.lastPage,
+          zoom: s.zoom,
+          pageCount: s.pageCount,
+          annotationCount: s.annotationCount,
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, [activeDoc?.id]);
+
+  // Pre-render surrounding pages smoothly as currentPage advances
+  useEffect(() => {
+    if (!pdfProxy || isJumpingScrollRef.current) return;
+    syncRenderedPages(currentPage, totalPages);
+  }, [pdfProxy, currentPage, totalPages, syncRenderedPages]);
+
+  const totalPagesRef = useRef(totalPages);
+  totalPagesRef.current = totalPages;
+
+  // IntersectionObserver with generous 1500px margin so pages mount before scrolling into view
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !pdfProxy) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          const pageNum = Number(
+            (entry.target as HTMLElement).dataset.pageNumber,
+          );
+          if (!pageNum) continue;
+          if (entry.isIntersecting) visiblePagesRef.current.add(pageNum);
+          else visiblePagesRef.current.delete(pageNum);
+        }
+        if (!isJumpingScrollRef.current) {
+          syncRenderedPages(
+            readingStateRef.current.lastPage,
+            totalPagesRef.current,
+          );
+        }
+      },
+      { root, rootMargin: "1500px 0px" },
+    );
+
+    observerRef.current = observer;
+    for (const el of pageRefsMap.current.values()) {
+      observer.observe(el);
+    }
+
+    return () => {
+      observer.disconnect();
+      observerRef.current = null;
+    };
+  }, [pdfProxy, syncRenderedPages]);
+
+  // Scroll spy (O(log N) binary search via viewport rects) + directional pre-render
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
     let rafId: number | null = null;
 
+    const releaseLocksOnUserInput = () => {
+      pendingRestorePageRef.current = null;
+      programmaticScrollRef.current = false;
+    };
+
+    const detectCurrentPage = () => {
+      const listEl = pagesContainerRef.current;
+      if (!listEl || listEl.children.length === 0) return;
+
+      const containerRect = container.getBoundingClientRect();
+      const focalY = containerRect.top + containerRect.height * 0.35;
+      const children = listEl.children;
+      let lo = 0;
+      let hi = children.length - 1;
+      let bestIdx = 0;
+
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const rect = (children[mid] as HTMLElement).getBoundingClientRect();
+        if (focalY < rect.top) {
+          bestIdx = mid;
+          hi = mid - 1;
+        } else if (focalY > rect.bottom) {
+          bestIdx = mid;
+          lo = mid + 1;
+        } else {
+          bestIdx = mid;
+          break;
+        }
+      }
+
+      if (bestIdx > 0) {
+        const currRect = (
+          children[bestIdx] as HTMLElement
+        ).getBoundingClientRect();
+        const prevRect = (
+          children[bestIdx - 1] as HTMLElement
+        ).getBoundingClientRect();
+        if (
+          focalY < currRect.top &&
+          Math.abs(prevRect.bottom - focalY) < Math.abs(currRect.top - focalY)
+        ) {
+          bestIdx -= 1;
+        }
+      } else if (bestIdx < children.length - 1) {
+        const currRect = (
+          children[bestIdx] as HTMLElement
+        ).getBoundingClientRect();
+        const nextRect = (
+          children[bestIdx + 1] as HTMLElement
+        ).getBoundingClientRect();
+        if (
+          focalY > currRect.bottom &&
+          Math.abs(nextRect.top - focalY) < Math.abs(currRect.bottom - focalY)
+        ) {
+          bestIdx += 1;
+        }
+      }
+
+      const matchedPage = bestIdx + 1;
+      setCurrentPage((prev) => (prev !== matchedPage ? matchedPage : prev));
+    };
+
     const onScroll = () => {
-      if (programmaticScrollRef.current) return;
-      if (rafId !== null) return;
+      const nowTop = container.scrollTop;
+      const signedDelta = nowTop - lastScrollTopRef.current;
+      const absDelta = Math.abs(signedDelta);
+      lastScrollTopRef.current = nowTop;
+
+      if (signedDelta > 2) scrollDirectionRef.current = 1;
+      else if (signedDelta < -2) scrollDirectionRef.current = -1;
+
+      // Only defer rendering on huge scrollbar drags (> 900px in a single event)
+      if (absDelta > 900 && !programmaticScrollRef.current) {
+        isJumpingScrollRef.current = true;
+      }
+
+      if (scrollSettleTimerRef.current) {
+        clearTimeout(scrollSettleTimerRef.current);
+      }
+      scrollSettleTimerRef.current = setTimeout(() => {
+        isJumpingScrollRef.current = false;
+        if (
+          !programmaticScrollRef.current &&
+          pendingRestorePageRef.current === null
+        ) {
+          detectCurrentPage();
+        }
+        syncRenderedPages(
+          readingStateRef.current.lastPage,
+          totalPagesRef.current,
+        );
+      }, 75);
+
+      if (
+        programmaticScrollRef.current ||
+        pendingRestorePageRef.current !== null ||
+        rafId !== null
+      ) {
+        return;
+      }
 
       rafId = requestAnimationFrame(() => {
         rafId = null;
-        if (programmaticScrollRef.current) return;
-        const listEl = pagesContainerRef.current;
-        if (!listEl || listEl.children.length === 0) return;
-
-        const focalY = container.scrollTop + container.clientHeight * 0.35;
-        const children = listEl.children;
-        let lo = 0;
-        let hi = children.length - 1;
-        let bestIdx = 0;
-
-        while (lo <= hi) {
-          const mid = (lo + hi) >> 1;
-          const el = children[mid] as HTMLElement;
-          const top = el.offsetTop;
-          const bottom = top + el.offsetHeight;
-
-          if (focalY < top) {
-            bestIdx = mid;
-            hi = mid - 1;
-          } else if (focalY > bottom) {
-            bestIdx = mid;
-            lo = mid + 1;
-          } else {
-            bestIdx = mid;
-            break;
-          }
+        if (
+          programmaticScrollRef.current ||
+          pendingRestorePageRef.current !== null
+        ) {
+          return;
         }
-
-        // Refine against immediate neighbor if focalY sits in the gap between pages
-        if (bestIdx > 0) {
-          const currEl = children[bestIdx] as HTMLElement;
-          const prevEl = children[bestIdx - 1] as HTMLElement;
-          const distCurr = Math.abs(currEl.offsetTop - focalY);
-          const distPrev = Math.abs(
-            prevEl.offsetTop + prevEl.offsetHeight - focalY,
-          );
-          if (focalY < currEl.offsetTop && distPrev < distCurr) {
-            bestIdx = bestIdx - 1;
-          }
-        }
-
-        const matchedPage = bestIdx + 1;
-        setCurrentPage((prev) => (prev !== matchedPage ? matchedPage : prev));
+        detectCurrentPage();
       });
     };
 
     container.addEventListener("scroll", onScroll, { passive: true });
+    container.addEventListener("wheel", releaseLocksOnUserInput, {
+      passive: true,
+    });
+    container.addEventListener("pointerdown", releaseLocksOnUserInput, {
+      passive: true,
+    });
+    container.addEventListener("touchstart", releaseLocksOnUserInput, {
+      passive: true,
+    });
+
     return () => {
       container.removeEventListener("scroll", onScroll);
+      container.removeEventListener("wheel", releaseLocksOnUserInput);
+      container.removeEventListener("pointerdown", releaseLocksOnUserInput);
+      container.removeEventListener("touchstart", releaseLocksOnUserInput);
       if (rafId !== null) cancelAnimationFrame(rafId);
+      if (scrollSettleTimerRef.current) {
+        clearTimeout(scrollSettleTimerRef.current);
+      }
     };
-  }, [zoomLevel, totalPages]);
+  }, [syncRenderedPages, pdfSource, pdfProxy]);
 
   const burnableAnnotations = useMemo(
     () =>
@@ -363,11 +701,11 @@ export function ViewerView() {
 
     try {
       await Promise.all([
-        BinaryStorage.saveAnnotations(docId, [
+        DocumentDatabase.saveAnnotations(docId, [
           ...annotations,
           ...cropAnnotations,
         ]),
-        BinaryStorage.saveBookmarks(docId, bookmarks),
+        DocumentDatabase.saveBookmarks(docId, bookmarks),
         DocumentCatalogStorage.updateDocument(docId, {
           lastPage: currentPage,
           zoom: zoomLevel,
@@ -377,11 +715,7 @@ export function ViewerView() {
       ]);
 
       if (activeDoc.filePath) {
-        await PdfService.burnAndSave(
-          activeDoc.filePath,
-          burnableAnnotations,
-          getActivePdfBuffer(),
-        );
+        await PdfService.burnAndSave(activeDoc.filePath, burnableAnnotations);
       }
 
       savedBookmarksRef.current = bookmarks;
@@ -406,11 +740,6 @@ export function ViewerView() {
     markSaved,
     clearDirty,
   ]);
-
-  useEffect(() => {
-    setSaveExecutor(executeSave);
-    return () => setSaveExecutor(null);
-  }, [setSaveExecutor, executeSave]);
 
   // Keyboard shortcuts & Ctrl/Cmd hyperlink modifier
   useEffect(() => {
@@ -438,7 +767,7 @@ export function ViewerView() {
         const key = e.key.toLowerCase();
         if (key === "s") {
           e.preventDefault();
-          saveDocument();
+          executeSave();
         } else if (key === "f") {
           e.preventDefault();
           search.openSearch();
@@ -466,7 +795,7 @@ export function ViewerView() {
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
     };
-  }, [search, saveDocument, canUndo, canRedo, undo, redo]);
+  }, [search, executeSave, canUndo, canRedo, undo, redo]);
 
   // Ctrl/Cmd + Wheel zoom
   useEffect(() => {
@@ -482,7 +811,7 @@ export function ViewerView() {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, []);
+  }, [pdfSource, pdfProxy]);
 
   const currentLabel = pageLabels[currentPage - 1] || String(currentPage);
   const isBookmarked = bookmarks.some((b) => b.pageNumber === currentPage);
@@ -509,8 +838,7 @@ export function ViewerView() {
   const handleFitToWidth = useCallback(() => {
     if (!scrollRef.current) return;
     const avail = scrollRef.current.clientWidth - 48;
-    const dim = pageDimensions[currentPage] ??
-      pageDimensions[1] ?? { width: 612, height: 792 };
+    const dim = pageDimensions[currentPage] ?? pageDimensions[1] ?? DEFAULT_DIM;
     if (dim.width > 0) {
       setZoomLevel(
         Math.min(500, Math.max(25, Math.floor((avail / dim.width) * 100))),
@@ -518,7 +846,6 @@ export function ViewerView() {
     }
   }, [pageDimensions, currentPage]);
 
-  // Stable callbacks for PdfPage (preserves React.memo)
   const handleAddAnnotation = useCallback(
     (annot: PdfAnnotation) => {
       hasEditedAnnotationsRef.current = true;
@@ -537,7 +864,7 @@ export function ViewerView() {
 
   const handleNoteClick = useCallback(
     (note: NoteAnnotation, pos: { x: number; y: number }) => {
-      setEditingNote(note);
+      setEditingNoteId(note.id);
       setNoteAnchorPos(pos);
     },
     [],
@@ -552,8 +879,9 @@ export function ViewerView() {
       width: number;
       height: number;
     }) => {
+      if (!activeDoc?.id) return;
       const id = `crop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      await BinaryStorage.saveFigureCrop(id, crop.imageUrl);
+      await DocumentDatabase.saveFigureCrop(id, crop.imageUrl, activeDoc.id);
       setCropAnnotations((prev) => [
         {
           id,
@@ -571,7 +899,7 @@ export function ViewerView() {
       ]);
       toast.success("Figure captured");
     },
-    [],
+    [activeDoc?.id],
   );
 
   const handleDimensionsDiscovered = useCallback(
@@ -605,10 +933,52 @@ export function ViewerView() {
 
   const handleDocumentLoadSuccess = useCallback(
     async (loaded: any) => {
+      const count = loaded.numPages;
       setPdfProxy(loaded);
-      setTotalPages(loaded.numPages);
-      if (activeDoc?.id) {
-        setDocPageCount(activeDoc.id, loaded.numPages);
+      setTotalPages(count);
+      if (activeDoc?.id) setDocPageCount(activeDoc.id, count);
+
+      const targetPage = Math.min(
+        count,
+        Math.max(1, pendingRestorePageRef.current ?? 1),
+      );
+      if (targetPage > 1) {
+        programmaticScrollRef.current = true;
+        setCurrentPage(targetPage);
+        setRenderedPages(
+          new Set(
+            [
+              targetPage - 2,
+              targetPage - 1,
+              targetPage,
+              targetPage + 1,
+              targetPage + 2,
+              targetPage + 3,
+            ].filter((p) => p >= 1 && p <= count),
+          ),
+        );
+        requestAnimationFrame(() => {
+          const el = pageRefsMap.current.get(targetPage);
+          const container = scrollRef.current;
+          if (container && el) {
+            const topDelta =
+              el.getBoundingClientRect().top -
+              container.getBoundingClientRect().top;
+            container.scrollTo({
+              top: Math.max(0, container.scrollTop + topDelta - 24),
+              behavior: "auto",
+            });
+          }
+          restoreTimerRef.current = setTimeout(() => {
+            programmaticScrollRef.current = false;
+            pendingRestorePageRef.current = null;
+          }, 80);
+        });
+      } else {
+        pendingRestorePageRef.current = null;
+        setRenderedPages(
+          new Set([1, 2, 3, 4].filter((p) => p >= 1 && p <= count)),
+        );
       }
 
       const [nextOutline, nextLabels] = await Promise.all([
@@ -617,32 +987,19 @@ export function ViewerView() {
       ]);
       setOutline(nextOutline);
       if (nextLabels) setPageLabels(nextLabels);
-
-      if (activeDoc?.lastPage && activeDoc.lastPage > 1) {
-        requestAnimationFrame(() => jumpToPage(activeDoc.lastPage!));
-      }
     },
-    [activeDoc?.id, activeDoc?.lastPage, setDocPageCount, jumpToPage],
+    [activeDoc?.id, setDocPageCount],
   );
 
   const handleDocumentLoadError = useCallback((err: Error) => {
     toast.error(err?.message || "Failed to load PDF");
   }, []);
 
-  const documentLoadingFallback = useMemo(
-    () => (
-      <div className="flex h-64 items-center justify-center gap-2 text-xs text-muted-foreground">
-        <Loader2 size={16} strokeWidth={1.5} className="animate-spin" />
-        <span>Loading document</span>
-      </div>
-    ),
-    [],
-  );
-
   if (!activeDoc || !pdfSource) return null;
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--bg-deep)]">
+      {/* Row 1: Full-width ViewerHeader */}
       <ViewerHeader
         currentPage={currentPage}
         totalPages={totalPages}
@@ -669,39 +1026,7 @@ export function ViewerView() {
         onOpenSearch={search.openSearch}
       />
 
-      <PdfToolbar
-        presets={toolManager.presets}
-        activeState={toolManager.activeState}
-        canUndo={canUndo}
-        canRedo={canRedo}
-        onUndo={undo}
-        onRedo={redo}
-        onTogglePreset={toolManager.togglePreset}
-        onSetSelectMode={toolManager.setSelectMode}
-        onSetStrokeWidth={toolManager.setStrokeWidth}
-        onSetUnderlineStyle={toolManager.setUnderlineStyle}
-        onAddPreset={toolManager.addPreset}
-        onUpdatePreset={toolManager.updatePreset}
-        onRemovePreset={toolManager.removePreset}
-        onResetPresets={toolManager.resetPresets}
-      />
-
-      <SearchOverlay
-        isOpen={search.isSearchOpen}
-        searchQuery={search.searchQuery}
-        isSearching={search.isSearching}
-        totalMatches={search.searchResults.length}
-        currentMatchIndex={search.currentMatchIndex}
-        searchInputRef={search.searchInputRef}
-        onQueryChange={(q) => {
-          search.setSearchQuery(q);
-          search.executeSearch(q);
-        }}
-        onNext={search.handleSearchNext}
-        onPrev={search.handleSearchPrev}
-        onClose={search.closeSearch}
-      />
-
+      {/* Row 2+: Sidebar on left, Toolbar + PDF canvas on right */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <PdfSidebar
           isOpen={sidebarOpen}
@@ -716,93 +1041,139 @@ export function ViewerView() {
             setBookmarks((prev) => prev.filter((b) => b.id !== id));
           }}
           onDeleteCrop={async (id) => {
-            await BinaryStorage.deleteFigureCrop(id);
+            await DocumentDatabase.deleteFigureCrop(id);
             setCropAnnotations((prev) => prev.filter((c) => c.id !== id));
           }}
         />
 
-        <div
-          ref={scrollRef}
-          className={`relative flex-1 overflow-auto p-6 ${isCtrlHeld ? "ctrl-active" : ""}`}
-        >
-          <Document
-            file={pdfSource}
-            options={PDF_DOCUMENT_OPTIONS}
-            externalLinkTarget="_blank"
-            externalLinkRel="noopener noreferrer"
-            onItemClick={handleDocumentItemClick}
-            onLoadSuccess={handleDocumentLoadSuccess}
-            onLoadError={handleDocumentLoadError}
-            loading={documentLoadingFallback}
-          >
+        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+          <PdfToolbar
+            presets={toolManager.presets}
+            activeState={toolManager.activeState}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={undo}
+            onRedo={redo}
+            onTogglePreset={toolManager.togglePreset}
+            onSetSelectMode={toolManager.setSelectMode}
+            onSetStrokeWidth={toolManager.setStrokeWidth}
+            onSetUnderlineStyle={toolManager.setUnderlineStyle}
+            onAddPreset={toolManager.addPreset}
+            onUpdatePreset={toolManager.updatePreset}
+            onRemovePreset={toolManager.removePreset}
+            onResetPresets={toolManager.resetPresets}
+          />
+
+          <div className="relative flex min-h-0 flex-1 overflow-hidden">
+            <SearchOverlay
+              isOpen={search.isSearchOpen}
+              searchQuery={search.searchQuery}
+              isSearching={search.isSearching}
+              totalMatches={search.searchResults.length}
+              currentMatchIndex={search.currentMatchIndex}
+              searchInputRef={search.searchInputRef}
+              onQueryChange={(q) => {
+                search.setSearchQuery(q);
+                search.executeSearch(q);
+              }}
+              onNext={search.handleSearchNext}
+              onPrev={search.handleSearchPrev}
+              onClose={search.closeSearch}
+            />
+
             <div
-              ref={pagesContainerRef}
-              className="mx-auto flex flex-col items-center gap-6"
+              ref={scrollRef}
+              className={`relative flex-1 overflow-auto p-6 ${isCtrlHeld ? "ctrl-active" : ""}`}
             >
-              {Array.from({ length: totalPages }, (_, i) => i + 1).map(
-                (pageNum) => {
-                  const dim = pageDimensions[pageNum] ??
-                    pageDimensions[1] ?? { width: 612, height: 792 };
-                  const w = Math.round((dim.width * zoomLevel) / 100);
-                  const h = Math.round((dim.height * zoomLevel) / 100);
+              <Document
+                file={pdfSource}
+                options={PDF_DOCUMENT_OPTIONS}
+                externalLinkTarget="_blank"
+                externalLinkRel="noopener noreferrer"
+                onItemClick={handleDocumentItemClick}
+                onLoadSuccess={handleDocumentLoadSuccess}
+                onLoadError={handleDocumentLoadError}
+                loading={null}
+              >
+                <div
+                  ref={pagesContainerRef}
+                  className="mx-auto flex flex-col items-center gap-6"
+                >
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+                    (pageNum) => {
+                      const dim =
+                        pageDimensions[pageNum] ??
+                        pageDimensions[1] ??
+                        DEFAULT_DIM;
+                      const w = Math.round((dim.width * zoomLevel) / 100);
+                      const h = Math.round((dim.height * zoomLevel) / 100);
 
-                  return renderedPages.has(pageNum) ? (
-                    <PdfPage
-                      key={pageNum}
-                      pageNumber={pageNum}
-                      zoomLevel={zoomLevel}
-                      estimatedWidth={dim.width}
-                      estimatedHeight={dim.height}
-                      activeTool={toolManager.activeState.toolType}
-                      activeColor={toolManager.activeState.color}
-                      activeStrokeWidth={toolManager.activeState.strokeWidth}
-                      activeUnderlineStyle={
-                        toolManager.activeState.underlineStyle
-                      }
-                      pageAnnotations={
-                        annotationsByPage.get(pageNum) ?? EMPTY_PAGE_ANNOTATIONS
-                      }
-                      registerPageRef={registerPageRef}
-                      onAddAnnotation={handleAddAnnotation}
-                      onDeleteAnnotation={handleDeleteAnnotation}
-                      onNoteClick={handleNoteClick}
-                      onAddFigureCrop={handleAddFigureCrop}
-                      onDimensionsDiscovered={handleDimensionsDiscovered}
-                    />
-                  ) : (
-                    <div
-                      key={pageNum}
-                      ref={(el) => registerPageRef(pageNum, el)}
-                      data-page-number={pageNum}
-                      style={{ width: w, height: h }}
-                      className="flex items-center justify-center rounded-sm border border-border bg-card font-mono text-xs tabular-nums text-muted-foreground select-none"
-                    >
-                      Page {pageLabels[pageNum - 1] || pageNum}
-                    </div>
-                  );
-                },
-              )}
+                      return (
+                        <div
+                          key={pageNum}
+                          ref={getPageRefCallback(pageNum)}
+                          data-page-number={pageNum}
+                        >
+                          {renderedPages.has(pageNum) ? (
+                            <PdfPage
+                              pageNumber={pageNum}
+                              zoomLevel={zoomLevel}
+                              renderZoomLevel={renderZoom}
+                              estimatedWidth={dim.width}
+                              estimatedHeight={dim.height}
+                              activeTool={toolManager.activeState.toolType}
+                              activeColor={toolManager.activeState.color}
+                              activeStrokeWidth={
+                                toolManager.activeState.strokeWidth
+                              }
+                              activeUnderlineStyle={
+                                toolManager.activeState.underlineStyle
+                              }
+                              pageAnnotations={
+                                annotationsByPage.get(pageNum) ?? EMPTY_ANNOTS
+                              }
+                              registerPageRef={noopRegisterPageRef}
+                              onAddAnnotation={handleAddAnnotation}
+                              onDeleteAnnotation={handleDeleteAnnotation}
+                              onNoteClick={handleNoteClick}
+                              onAddFigureCrop={handleAddFigureCrop}
+                              onDimensionsDiscovered={
+                                handleDimensionsDiscovered
+                              }
+                            />
+                          ) : (
+                            <div
+                              style={{ width: w, height: h }}
+                              aria-hidden="true"
+                              className="rounded-sm border border-border bg-white shadow-[var(--shadow-sm)]"
+                            />
+                          )}
+                        </div>
+                      );
+                    },
+                  )}
+                </div>
+              </Document>
             </div>
-          </Document>
-        </div>
 
-        {isCtrlHeld && (
-          <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-[var(--shadow-sm)]">
-            Links active
+            {isCtrlHeld && (
+              <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-[var(--shadow-sm)]">
+                Links active
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       <NoteEditorPortal
         note={editingNote}
         anchorPos={noteAnchorPos}
         onClose={() => {
-          setEditingNote(null);
+          setEditingNoteId(null);
           setNoteAnchorPos(null);
         }}
         onUpdateNote={(updated) => {
           hasEditedAnnotationsRef.current = true;
-          setEditingNote(updated);
           setAnnotations((prev) =>
             prev.map((a) => (a.id === updated.id ? updated : a)),
           );
@@ -810,7 +1181,7 @@ export function ViewerView() {
         onDeleteNote={(id) => {
           hasEditedAnnotationsRef.current = true;
           setAnnotations((prev) => prev.filter((a) => a.id !== id));
-          setEditingNote(null);
+          setEditingNoteId(null);
           setNoteAnchorPos(null);
         }}
       />

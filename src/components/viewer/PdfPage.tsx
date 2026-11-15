@@ -7,6 +7,7 @@ import {
   type NoteAnnotation,
   type PdfAnnotation,
   type Point,
+  type TextMarkupAnnotation,
   isInkAnnotation,
   isNoteAnnotation,
   isTextMarkupAnnotation,
@@ -16,6 +17,7 @@ import type { ToolType, UnderlineStyle } from "@/types/tools";
 interface PdfPageProps {
   pageNumber: number;
   zoomLevel: number;
+  renderZoomLevel: number;
   estimatedWidth: number;
   estimatedHeight: number;
   activeTool: ToolType;
@@ -41,9 +43,15 @@ interface PdfPageProps {
 const makeId = (prefix: string) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
+const pointsToSvgPath = (points: Point[]) =>
+  points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 1000} ${p.y * 1000}`)
+    .join(" ");
+
 export const PdfPage = memo(function PdfPage({
   pageNumber,
   zoomLevel,
+  renderZoomLevel,
   estimatedWidth,
   estimatedHeight,
   activeTool,
@@ -59,6 +67,11 @@ export const PdfPage = memo(function PdfPage({
   onDimensionsDiscovered,
 }: PdfPageProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [discoveredDim, setDiscoveredDim] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
   const [inkDraft, setInkDraft] = useState<Point[] | null>(null);
   const [cropRect, setCropRect] = useState<{
     startX: number;
@@ -75,18 +88,17 @@ export const PdfPage = memo(function PdfPage({
     [pageNumber, registerPageRef],
   );
 
-  const textMarkups = useMemo(
-    () => pageAnnotations.filter(isTextMarkupAnnotation),
-    [pageAnnotations],
-  );
-  const inkAnnotations = useMemo(
-    () => pageAnnotations.filter(isInkAnnotation),
-    [pageAnnotations],
-  );
-  const noteAnnotations = useMemo(
-    () => pageAnnotations.filter(isNoteAnnotation),
-    [pageAnnotations],
-  );
+  const { textMarkups, inkAnnotations, noteAnnotations } = useMemo(() => {
+    const textMarkups: TextMarkupAnnotation[] = [];
+    const inkAnnotations: InkAnnotation[] = [];
+    const noteAnnotations: NoteAnnotation[] = [];
+    for (const a of pageAnnotations) {
+      if (isTextMarkupAnnotation(a)) textMarkups.push(a);
+      else if (isInkAnnotation(a)) inkAnnotations.push(a);
+      else if (isNoteAnnotation(a)) noteAnnotations.push(a);
+    }
+    return { textMarkups, inkAnnotations, noteAnnotations };
+  }, [pageAnnotations]);
 
   const normalizePoint = useCallback(
     (clientX: number, clientY: number): Point | null => {
@@ -188,8 +200,20 @@ export const PdfPage = memo(function PdfPage({
   const handleOverlayPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const pt = normalizePoint(e.clientX, e.clientY);
     if (!pt) return;
+
     if (inkDraft) {
-      setInkDraft((prev) => (prev ? [...prev, pt] : null));
+      setInkDraft((prev) => {
+        if (!prev) return null;
+        const last = prev[prev.length - 1];
+        if (
+          last &&
+          Math.abs(pt.x - last.x) < 0.0015 &&
+          Math.abs(pt.y - last.y) < 0.0015
+        ) {
+          return prev;
+        }
+        return [...prev, pt];
+      });
     } else if (cropRect) {
       setCropRect((prev) =>
         prev ? { ...prev, currX: pt.x, currY: pt.y } : null,
@@ -200,7 +224,7 @@ export const PdfPage = memo(function PdfPage({
   const handleOverlayPointerUp = () => {
     if (inkDraft) {
       if (inkDraft.length >= 2) {
-        const annot: InkAnnotation = {
+        onAddAnnotation({
           id: makeId("ink"),
           pageNumber,
           toolType: "freehand_write",
@@ -210,8 +234,7 @@ export const PdfPage = memo(function PdfPage({
           x: inkDraft[0].x,
           y: inkDraft[0].y,
           createdAt: new Date().toISOString(),
-        };
-        onAddAnnotation(annot);
+        });
       }
       setInkDraft(null);
     }
@@ -224,8 +247,10 @@ export const PdfPage = memo(function PdfPage({
       setCropRect(null);
 
       if (width > 0.02 && height > 0.02 && wrapperRef.current) {
-        const canvas = wrapperRef.current.querySelector("canvas");
-        if (canvas) {
+        const canvas = (wrapperRef.current.querySelector(
+          ".react-pdf__Page__canvas",
+        ) ?? bufferCanvasRef.current) as HTMLCanvasElement | null;
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
           const out = document.createElement("canvas");
           const sx = x * canvas.width;
           const sy = y * canvas.height;
@@ -253,10 +278,27 @@ export const PdfPage = memo(function PdfPage({
   const handlePageLoadSuccess = useCallback(
     (page: any) => {
       const vp = page.getViewport({ scale: 1 });
+      setDiscoveredDim({ width: vp.width, height: vp.height });
       onDimensionsDiscovered(pageNumber, vp.width, vp.height);
     },
     [pageNumber, onDimensionsDiscovered],
   );
+
+  // Snapshot rendered canvas into back-buffer so subsequent zoom re-renders never blink white
+  const handlePageRenderSuccess = useCallback(() => {
+    const wrapper = wrapperRef.current;
+    const buf = bufferCanvasRef.current;
+    if (!wrapper || !buf) return;
+    const pdfCanvas = wrapper.querySelector(
+      ".react-pdf__Page__canvas",
+    ) as HTMLCanvasElement | null;
+    if (!pdfCanvas || pdfCanvas.width === 0 || pdfCanvas.height === 0) return;
+
+    buf.width = pdfCanvas.width;
+    buf.height = pdfCanvas.height;
+    const ctx = buf.getContext("2d");
+    ctx?.drawImage(pdfCanvas, 0, 0);
+  }, []);
 
   const needsDrawingLayer =
     activeTool === "freehand_write" ||
@@ -266,101 +308,123 @@ export const PdfPage = memo(function PdfPage({
   const isEraser = activeTool === "eraser";
   const dpr =
     typeof window !== "undefined"
-      ? Math.min(window.devicePixelRatio || 1, 2)
+      ? Math.min(window.devicePixelRatio || 1, renderZoomLevel > 150 ? 1.5 : 2)
       : 1;
 
+  const baseWidth = discoveredDim?.width ?? estimatedWidth;
+  const baseHeight = discoveredDim?.height ?? estimatedHeight;
   const scale = zoomLevel / 100;
-  const minW = Math.round(estimatedWidth * scale);
-  const minH = Math.round(estimatedHeight * scale);
+  const renderScale = renderZoomLevel / 100;
+  const cssScale = zoomLevel / renderZoomLevel;
 
   return (
     <div
       ref={setRefs}
       data-page-number={pageNumber}
       onMouseUp={handleTextMarkup}
-      style={{ minWidth: minW, minHeight: minH }}
+      style={{
+        width: Math.round(baseWidth * scale),
+        height: Math.round(baseHeight * scale),
+      }}
       className={cn(
         "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)]",
-        activeTool === "freehand_write" && "cursor-crosshair",
-        activeTool === "area_select" && "cursor-crosshair",
+        (activeTool === "freehand_write" || activeTool === "area_select") &&
+          "cursor-crosshair",
         activeTool === "popup_note" && "cursor-cell",
       )}
     >
-      <Page
-        pageNumber={pageNumber}
-        scale={scale}
-        devicePixelRatio={dpr}
-        renderAnnotationLayer
-        renderTextLayer
-        loading={null}
-        onLoadSuccess={handlePageLoadSuccess}
+      {/* Persistent back-buffer canvas holds previous frame during async scale re-render */}
+      <canvas
+        ref={bufferCanvasRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-0 h-full w-full"
       />
+
+      {/* Live PDF page; CSS-scaled immediately while zoom is changing, then re-rendered at settled DPI */}
+      <div
+        style={
+          cssScale !== 1
+            ? {
+                transform: `scale(${cssScale})`,
+                transformOrigin: "top left",
+                width: Math.round(baseWidth * renderScale),
+                height: Math.round(baseHeight * renderScale),
+              }
+            : undefined
+        }
+        className="relative z-[1] [&_.react-pdf__Page]:!bg-transparent"
+      >
+        <Page
+          pageNumber={pageNumber}
+          scale={renderScale}
+          devicePixelRatio={dpr}
+          renderAnnotationLayer
+          renderTextLayer
+          loading={null}
+          onLoadSuccess={handlePageLoadSuccess}
+          onRenderSuccess={handlePageRenderSuccess}
+        />
+      </div>
 
       {/* Rendered text markups */}
       <div className="pointer-events-none absolute inset-0 z-10">
         {textMarkups.map((annot) =>
-          annot.rectSegments.map((seg, idx) => {
-            const style = {
-              left: `${seg.x * 100}%`,
-              top: `${seg.y * 100}%`,
-              width: `${seg.width * 100}%`,
-              height: `${seg.height * 100}%`,
-            };
-
-            return (
-              <div
-                key={`${annot.id}-${idx}`}
-                onClick={
-                  isEraser ? () => onDeleteAnnotation(annot.id) : undefined
-                }
-                style={style}
-                className={cn(
-                  "absolute",
-                  isEraser &&
-                    "pointer-events-auto cursor-pointer hover:opacity-60",
-                )}
-              >
-                {annot.toolType === "highlight" && (
-                  <div
-                    className="h-full w-full rounded-[2px] opacity-35 mix-blend-multiply"
-                    style={{ backgroundColor: annot.color }}
-                  />
-                )}
-                {annot.toolType === "strikethrough" && (
-                  <div
-                    className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
-                    style={{ backgroundColor: annot.color }}
-                  />
-                )}
-                {annot.toolType === "underline" &&
-                  (annot.underlineStyle === "squiggle" ? (
-                    <svg
-                      viewBox="0 0 100 8"
-                      preserveAspectRatio="none"
-                      className="absolute inset-x-0 bottom-0 h-[4px] w-full"
-                    >
-                      <path
-                        d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
-                        fill="none"
-                        stroke={annot.color}
-                        strokeWidth="2"
-                      />
-                    </svg>
-                  ) : (
-                    <div
-                      className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
-                      style={{
-                        borderColor: annot.color,
-                        borderStyle:
-                          annot.underlineStyle === "dashed"
-                            ? "dashed"
-                            : "solid",
-                      }}
+          annot.rectSegments.map((seg, idx) => (
+            <div
+              key={`${annot.id}-${idx}`}
+              onClick={
+                isEraser ? () => onDeleteAnnotation(annot.id) : undefined
+              }
+              style={{
+                left: `${seg.x * 100}%`,
+                top: `${seg.y * 100}%`,
+                width: `${seg.width * 100}%`,
+                height: `${seg.height * 100}%`,
+              }}
+              className={cn(
+                "absolute",
+                isEraser &&
+                  "pointer-events-auto cursor-pointer hover:opacity-60",
+              )}
+            >
+              {annot.toolType === "highlight" && (
+                <div
+                  className="h-full w-full rounded-[2px] opacity-35 mix-blend-multiply"
+                  style={{ backgroundColor: annot.color }}
+                />
+              )}
+              {annot.toolType === "strikethrough" && (
+                <div
+                  className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
+                  style={{ backgroundColor: annot.color }}
+                />
+              )}
+              {annot.toolType === "underline" &&
+                (annot.underlineStyle === "squiggle" ? (
+                  <svg
+                    viewBox="0 0 100 8"
+                    preserveAspectRatio="none"
+                    className="absolute inset-x-0 bottom-0 h-[4px] w-full"
+                  >
+                    <path
+                      d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
+                      fill="none"
+                      stroke={annot.color}
+                      strokeWidth="2"
                     />
-                  ))}
-              </div>
-            );
-          }),
+                  </svg>
+                ) : (
+                  <div
+                    className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
+                    style={{
+                      borderColor: annot.color,
+                      borderStyle:
+                        annot.underlineStyle === "dashed" ? "dashed" : "solid",
+                    }}
+                  />
+                ))}
+            </div>
+          )),
         )}
       </div>
 
@@ -370,38 +434,26 @@ export const PdfPage = memo(function PdfPage({
         preserveAspectRatio="none"
         className="pointer-events-none absolute inset-0 z-20 h-full w-full"
       >
-        {inkAnnotations.map((annot) => {
-          const d = annot.points
-            .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 1000} ${p.y * 1000}`)
-            .join(" ");
-          return (
-            <path
-              key={annot.id}
-              d={d}
-              fill="none"
-              stroke={annot.color}
-              strokeWidth={annot.strokeWidth}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              vectorEffect="non-scaling-stroke"
-              onClick={
-                isEraser ? () => onDeleteAnnotation(annot.id) : undefined
-              }
-              className={cn(
-                isEraser &&
-                  "pointer-events-auto cursor-pointer hover:opacity-50",
-              )}
-            />
-          );
-        })}
+        {inkAnnotations.map((annot) => (
+          <path
+            key={annot.id}
+            d={pointsToSvgPath(annot.points)}
+            fill="none"
+            stroke={annot.color}
+            strokeWidth={annot.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke"
+            onClick={isEraser ? () => onDeleteAnnotation(annot.id) : undefined}
+            className={cn(
+              isEraser && "pointer-events-auto cursor-pointer hover:opacity-50",
+            )}
+          />
+        ))}
 
         {inkDraft && inkDraft.length > 1 && (
           <path
-            d={inkDraft
-              .map(
-                (p, i) => `${i === 0 ? "M" : "L"} ${p.x * 1000} ${p.y * 1000}`,
-              )
-              .join(" ")}
+            d={pointsToSvgPath(inkDraft)}
             fill="none"
             stroke={activeColor}
             strokeWidth={activeStrokeWidth}
@@ -451,7 +503,7 @@ export const PdfPage = memo(function PdfPage({
             top: `${note.y * 100}%`,
             backgroundColor: note.color,
           }}
-          className="absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border border-black/15 text-black shadow-[var(--shadow-sm)] transition-transform duration-150 ease-[var(--ease-foliet)] hover:scale-105"
+          className="absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border border-black/15 text-black shadow-[var(--shadow-sm)] transition-colors duration-150 ease-[var(--ease-foliet)]"
         >
           <MessageSquare size={14} strokeWidth={1.5} />
         </button>

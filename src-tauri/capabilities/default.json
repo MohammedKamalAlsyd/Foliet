@@ -10,6 +10,8 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "dialog:allow-open",
+    "sql:default",
+    "sql:allow-execute",
     "store:default"
   ]
 }

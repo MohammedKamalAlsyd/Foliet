@@ -28,6 +28,7 @@ tauri-plugin-fs = "2.7.1"
 tauri-plugin-store = "2.5.1"
 lopdf = "0.47.0"
 sha2 = "0.11.1"
+tauri-plugin-sql = { version = "2.6.0", features = ["sqlite"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

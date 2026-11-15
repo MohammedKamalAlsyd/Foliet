@@ -12,6 +12,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 interface ViewerHeaderProps {
@@ -56,159 +62,222 @@ export function ViewerHeader({
   }, [currentLabel]);
 
   return (
-    <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-3 select-none">
-      {/* Left: Sidebar & Page Navigation */}
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={onToggleSidebar}
-          aria-label="Toggle sidebar"
-          title="Toggle sidebar"
-          className={cn(
-            "h-7 w-7",
-            isSidebarOpen
-              ? "bg-accent text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <PanelLeft size={16} strokeWidth={1.5} />
-        </Button>
+    <TooltipProvider>
+      <header className="grid h-12 shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-2 border-b border-border bg-background px-3 select-none">
+        {/* Left: Sidebar toggle + Zoom controls */}
+        <div className="flex items-center gap-1 justify-self-start">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onToggleSidebar}
+                  aria-label="Toggle sidebar"
+                  aria-pressed={isSidebarOpen}
+                  className={cn(
+                    "h-9 w-9 rounded-lg transition-colors duration-150 ease-[var(--ease-foliet)]",
+                    isSidebarOpen
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                />
+              }
+            >
+              <PanelLeft size={18} strokeWidth={1.5} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Toggle sidebar</TooltipContent>
+          </Tooltip>
 
-        <Separator orientation="vertical" className="mx-1 h-4" />
+          <Separator orientation="vertical" className="mx-1 h-5" />
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          disabled={currentPage <= 1}
-          onClick={() => onJumpToPage(currentPage - 1)}
-          aria-label="Previous page"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <ChevronLeft size={16} strokeWidth={1.5} />
-        </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onZoomChange(Math.max(25, zoomLevel - 15))}
+                  aria-label="Zoom out"
+                  className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+                />
+              }
+            >
+              <ZoomOut size={18} strokeWidth={1.5} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom out</TooltipContent>
+          </Tooltip>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            onCommitPageInput(pageDraft);
-          }}
-          className="flex items-center gap-1.5"
-        >
-          <Input
-            value={pageDraft}
-            onChange={(e) => setPageDraft(e.target.value)}
-            onBlur={() => onCommitPageInput(pageDraft)}
-            aria-label="Current page"
-            className="h-7 w-12 px-1.5 text-center font-mono text-xs tabular-nums"
-          />
-          <span className="font-mono text-xs tabular-nums text-muted-foreground">
-            / {totalPages}
-          </span>
-        </form>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={onResetZoom}
+                  aria-label="Reset zoom to 100%"
+                  className="h-9 min-w-16 rounded-lg px-2.5 font-mono text-xs tabular-nums text-foreground transition-colors duration-150 ease-[var(--ease-foliet)]"
+                />
+              }
+            >
+              {zoomLevel}%
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Reset zoom to 100%</TooltipContent>
+          </Tooltip>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          disabled={currentPage >= totalPages}
-          onClick={() => onJumpToPage(currentPage + 1)}
-          aria-label="Next page"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <ChevronRight size={16} strokeWidth={1.5} />
-        </Button>
-      </div>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => onZoomChange(Math.min(500, zoomLevel + 15))}
+                  aria-label="Zoom in"
+                  className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+                />
+              }
+            >
+              <ZoomIn size={18} strokeWidth={1.5} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Zoom in</TooltipContent>
+          </Tooltip>
 
-      {/* Center: Zoom Controls */}
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => onZoomChange(Math.max(25, zoomLevel - 15))}
-          aria-label="Zoom out"
-          title="Zoom out"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <ZoomOut size={16} strokeWidth={1.5} />
-        </Button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onFitToWidth}
+                  aria-label="Fit to width"
+                  className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+                />
+              }
+            >
+              <Maximize2 size={18} strokeWidth={1.5} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Fit to width</TooltipContent>
+          </Tooltip>
+        </div>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onResetZoom}
-          title="Reset zoom to 100%"
-          className="h-7 min-w-14 px-2 font-mono text-xs tabular-nums text-foreground"
-        >
-          {zoomLevel}%
-        </Button>
+        {/* Middle: Page navigation */}
+        <div className="flex items-center gap-1 justify-self-center">
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={currentPage <= 1}
+                onClick={() => onJumpToPage(currentPage - 1)}
+                aria-label="Previous page"
+                className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+              >
+                <ChevronLeft size={18} strokeWidth={1.5} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Previous page</TooltipContent>
+          </Tooltip>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => onZoomChange(Math.min(500, zoomLevel + 15))}
-          aria-label="Zoom in"
-          title="Zoom in"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <ZoomIn size={16} strokeWidth={1.5} />
-        </Button>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onCommitPageInput(pageDraft);
+            }}
+            className="flex items-center gap-2"
+          >
+            <Input
+              value={pageDraft}
+              onChange={(e) => setPageDraft(e.target.value)}
+              onBlur={() => onCommitPageInput(pageDraft)}
+              aria-label="Current page"
+              className="h-9 w-16 rounded-lg px-2 text-center font-mono text-xs tabular-nums"
+            />
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
+              / {totalPages}
+            </span>
+          </form>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={onFitToWidth}
-          aria-label="Fit to width"
-          title="Fit to width"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <Maximize2 size={16} strokeWidth={1.5} />
-        </Button>
-      </div>
+          <Tooltip>
+            <TooltipTrigger render={<span className="inline-flex" />}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={currentPage >= totalPages}
+                onClick={() => onJumpToPage(currentPage + 1)}
+                aria-label="Next page"
+                className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+              >
+                <ChevronRight size={18} strokeWidth={1.5} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">Next page</TooltipContent>
+          </Tooltip>
+        </div>
 
-      {/* Right: Search & Bookmark */}
-      <div className="flex items-center gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={onOpenSearch}
-          aria-label="Search document"
-          title={`Search (${shortcutModifier}+F)`}
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
-        >
-          <Search size={16} strokeWidth={1.5} />
-        </Button>
+        {/* Right: Search + Bookmark */}
+        <div className="flex items-center gap-1 justify-self-end">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onOpenSearch}
+                  aria-label="Search document"
+                  className="h-9 w-9 rounded-lg text-muted-foreground transition-colors duration-150 ease-[var(--ease-foliet)] hover:text-foreground"
+                />
+              }
+            >
+              <Search size={18} strokeWidth={1.5} />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              Search ({shortcutModifier}+F)
+            </TooltipContent>
+          </Tooltip>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={onToggleBookmark}
-          aria-label={
-            isCurrentPageBookmarked ? "Remove bookmark" : "Bookmark page"
-          }
-          title={isCurrentPageBookmarked ? "Remove bookmark" : "Bookmark page"}
-          className={cn(
-            "h-7 w-7",
-            isCurrentPageBookmarked
-              ? "text-[var(--accent-brand)]"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <Bookmark
-            size={16}
-            strokeWidth={1.5}
-            fill={isCurrentPageBookmarked ? "currentColor" : "none"}
-          />
-        </Button>
-      </div>
-    </div>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={onToggleBookmark}
+                  aria-label={
+                    isCurrentPageBookmarked
+                      ? "Remove bookmark"
+                      : "Bookmark page"
+                  }
+                  aria-pressed={isCurrentPageBookmarked}
+                  className={cn(
+                    "h-9 w-9 rounded-lg transition-colors duration-150 ease-[var(--ease-foliet)]",
+                    isCurrentPageBookmarked
+                      ? "text-[var(--accent-brand)]"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                />
+              }
+            >
+              <Bookmark
+                size={18}
+                strokeWidth={1.5}
+                fill={isCurrentPageBookmarked ? "currentColor" : "none"}
+              />
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isCurrentPageBookmarked ? "Remove bookmark" : "Bookmark page"}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </header>
+    </TooltipProvider>
   );
 }

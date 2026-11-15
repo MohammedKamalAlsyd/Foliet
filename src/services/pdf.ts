@@ -6,7 +6,7 @@ import type { BurnableAnnotation } from "@/types/annotations";
 import type { PdfOpenResult, PdfOutlineNode } from "@/types/document";
 
 export const PDF_DOCUMENT_OPTIONS = {
-    rangeChunkSize: 131_072,
+    rangeChunkSize: 1_048_576,
     disableAutoFetch: false,
     disableStream: false,
     isEvalSupported: false,
@@ -30,9 +30,10 @@ export class PdfService {
 
     /** Lazily extracts embedded PDF annotations in background after viewer opens. */
     static extractAnnotations(filePath: string) {
-        return invoke<PdfOpenResult["extractedAnnotations"]>("extract_pdf_annotations", {
-            filePath,
-        });
+        return invoke<PdfOpenResult["extractedAnnotations"]>(
+            "extract_pdf_annotations",
+            { filePath },
+        );
     }
 
     private static async burnBytes(
@@ -73,7 +74,9 @@ export class PdfService {
         originalBuffer?: ArrayBuffer | null,
     ): Promise<string | null> {
         const targetPath = await save({
-            defaultPath: defaultName.endsWith(".pdf") ? defaultName : `${defaultName}.pdf`,
+            defaultPath: defaultName.endsWith(".pdf")
+                ? defaultName
+                : `${defaultName}.pdf`,
             filters: [{ name: "PDF Documents", extensions: ["pdf"] }],
         });
         if (!targetPath) return null;
@@ -97,32 +100,38 @@ export class PdfService {
         const raw = await pdfProxy?.getOutline?.();
         if (!Array.isArray(raw)) return [];
 
-        const walk = async (items: any[], level: number, prefix: string): Promise<PdfOutlineNode[]> => {
-            const nodes: PdfOutlineNode[] = [];
-            for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                let pageNumber = 1;
-                try {
-                    let dest = item.dest;
-                    if (typeof dest === "string") dest = await pdfProxy.getDestination(dest);
-                    if (Array.isArray(dest) && dest[0]) {
-                        pageNumber = (await pdfProxy.getPageIndex(dest[0])) + 1;
+        const walk = (
+            items: any[],
+            level: number,
+            prefix: string,
+        ): Promise<PdfOutlineNode[]> =>
+            Promise.all(
+                items.map(async (item, i) => {
+                    let pageNumber = 1;
+                    try {
+                        const dest =
+                            typeof item.dest === "string"
+                                ? await pdfProxy.getDestination(item.dest)
+                                : item.dest;
+                        if (Array.isArray(dest) && dest[0]) {
+                            pageNumber = (await pdfProxy.getPageIndex(dest[0])) + 1;
+                        }
+                    } catch {
+                        // Fallback to page 1 if destination cannot be resolved
                     }
-                } catch {
-                    // Fallback to page 1 if destination cannot be resolved
-                }
-                const id = `${prefix}-${i}`;
-                nodes.push({
-                    id,
-                    title: item.title || "Untitled",
-                    pageNumber,
-                    level,
-                    dest: item.dest,
-                    children: item.items?.length ? await walk(item.items, level + 1, id) : undefined,
-                });
-            }
-            return nodes;
-        };
+                    const id = `${prefix}-${i}`;
+                    return {
+                        id,
+                        title: item.title || "Untitled",
+                        pageNumber,
+                        level,
+                        dest: item.dest,
+                        children: item.items?.length
+                            ? await walk(item.items, level + 1, id)
+                            : undefined,
+                    };
+                }),
+            );
 
         return walk(raw, 0, "outline");
     }
