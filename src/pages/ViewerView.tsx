@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { NoteEditorPortal } from "@/components/viewer/NoteEditorPortal";
 import { PdfPage } from "@/components/viewer/PdfPage";
 import { PdfSidebar } from "@/components/viewer/PdfSidebar";
+import { AiStudioSidebar } from "@/components/ai/AiStudioSidebar";
 import { PdfToolbar } from "@/components/viewer/PdfToolbar";
 import { SearchOverlay } from "@/components/viewer/SearchOverlay";
 import { ViewerHeader } from "@/components/viewer/ViewerHeader";
@@ -23,6 +24,7 @@ import { DocumentCatalogStorage } from "@/services/storage/catalog";
 import { DocumentDatabase } from "@/services/storage/database";
 import { SettingsStorage } from "@/services/storage/settings";
 import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
+import { useAiStore } from "@/stores/aiStore";
 import { useSystemStore } from "@/stores/systemStore";
 import {
   type BurnableAnnotation,
@@ -66,6 +68,7 @@ export function ViewerView() {
   const clearDirty = useDocumentStore((s) => s.clearDirty);
   const setDocPageCount = useDocumentStore((s) => s.setDocPageCount);
   const shortcutModifier = useSystemStore((s) => s.shortcutModifier);
+  const isAiStudioOpen = useAiStore((s) => s.isAiStudioOpen);
 
   const [pdfProxy, setPdfProxy] = useState<any | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -1164,6 +1167,12 @@ export function ViewerView() {
             )}
           </div>
         </div>
+
+        {/* Resizable Right AI Studio Sidebar */}
+        <AiStudioSidebar
+          isOpen={isAiStudioOpen}
+          onJumpToPage={jumpToPage}
+        />
       </div>
 
       <NoteEditorPortal

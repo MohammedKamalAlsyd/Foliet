@@ -34,6 +34,7 @@ export interface DocumentItem {
     scrollOffset?: number;
     zoom?: number;
     extractedAnnotations?: PdfAnnotation[];
+    isIndexed?: boolean;
 }
 
 export interface PdfOpenResult {

@@ -36,6 +36,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AiMascot } from "@/components/ai/AiMascot";
+import { useAiStore } from "@/stores/aiStore";
 import {
   type ActiveToolState,
   type ToolPreset,
@@ -111,6 +113,9 @@ export function PdfToolbar({
   const [selectedPresetId, setSelectedPresetId] = useState<string>(
     presets[0]?.id ?? "",
   );
+
+  const isAiStudioOpen = useAiStore((s) => s.isAiStudioOpen);
+  const toggleAiStudio = useAiStore((s) => s.toggleAiStudio);
 
   useEffect(() => {
     if (activeState.activePresetId) {
@@ -469,6 +474,39 @@ export function PdfToolbar({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* AI Studio Toggle Trigger */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={toggleAiStudio}
+                  aria-pressed={isAiStudioOpen}
+                  aria-label="Toggle AI Studio"
+                  className={cn(
+                    "h-9 gap-1.5 rounded-lg border px-3 text-xs font-medium transition-all duration-150 ease-[var(--ease-foliet)] select-none",
+                    isAiStudioOpen
+                      ? "border-[var(--accent-brand,#2563EB)]/50 bg-[var(--accent-brand,#2563EB)]/10 text-[var(--accent-brand,#2563EB)] shadow-sm font-medium"
+                      : "border-[var(--accent-brand,#2563EB)]/25 bg-[var(--accent-brand,#2563EB)]/[0.04] text-foreground hover:border-[var(--accent-brand,#2563EB)]/50 hover:bg-[var(--accent-brand,#2563EB)]/10 hover:text-[var(--accent-brand,#2563EB)]",
+                  )}
+                />
+              }
+            >
+              <AiMascot
+                size={16}
+                state={isAiStudioOpen ? "curious" : "idle"}
+                interactive={false}
+                className="shrink-0"
+              />
+              <span>AI Studio</span>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {isAiStudioOpen ? "Close AI Studio" : "Open AI Studio"}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </div>
 

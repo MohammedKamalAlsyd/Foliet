@@ -1,7 +1,9 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Page } from "react-pdf";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SelectionActionBar } from "@/components/viewer/SelectionActionBar";
+import { useAiStore } from "@/stores/aiStore";
 import {
   type InkAnnotation,
   type NoteAnnotation,
@@ -172,6 +174,37 @@ export const PdfPage = memo(function PdfPage({
     currX: number;
     currY: number;
   } | null>(null);
+  const [selectionState, setSelectionState] = useState<{
+    text: string;
+    rect: DOMRect;
+  } | null>(null);
+
+  const activeRagHighlight = useAiStore((s) => s.activeRagHighlight);
+  const isRagHighlighted = Boolean(
+    activeRagHighlight && activeRagHighlight.pageNumber === pageNumber
+  );
+
+  // Clear selection action bar if tool changes away from select
+  useEffect(() => {
+    if (activeTool !== "select" && selectionState) {
+      setSelectionState(null);
+    }
+  }, [activeTool, selectionState]);
+
+  // Dismiss action bar when selection is cleared in document
+  useEffect(() => {
+    if (!selectionState) return;
+    const handleDocSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.toString().trim()) {
+        setSelectionState(null);
+      }
+    };
+    document.addEventListener("selectionchange", handleDocSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleDocSelectionChange);
+    };
+  }, [selectionState]);
 
   const setRefs = useCallback(
     (el: HTMLDivElement | null) => {
@@ -266,6 +299,45 @@ export const PdfPage = memo(function PdfPage({
     pageNumber,
     onAddAnnotation,
   ]);
+
+  const handleMouseUp = useCallback(() => {
+    if (activeTool === "select") {
+      const selection = window.getSelection();
+      const wrapper = wrapperRef.current;
+      if (!selection || selection.isCollapsed || !wrapper) {
+        setSelectionState(null);
+        return;
+      }
+
+      const text = selection.toString().trim();
+      if (!text || selection.rangeCount === 0) {
+        setSelectionState(null);
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      if (
+        !wrapper.contains(range.commonAncestorContainer) &&
+        !wrapper.contains(range.startContainer)
+      ) {
+        return;
+      }
+
+      const rect = range.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        setSelectionState({ text, rect });
+      }
+      return;
+    }
+
+    if (
+      activeTool === "highlight" ||
+      activeTool === "underline" ||
+      activeTool === "strikethrough"
+    ) {
+      handleTextMarkup();
+    }
+  }, [activeTool, handleTextMarkup]);
 
   const handleOverlayPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -421,7 +493,7 @@ export const PdfPage = memo(function PdfPage({
     <div
       ref={setRefs}
       data-page-number={pageNumber}
-      onMouseUp={handleTextMarkup}
+      onMouseUp={handleMouseUp}
       style={{
         width: Math.round(baseWidth * scale),
         height: Math.round(baseHeight * scale),
@@ -431,6 +503,8 @@ export const PdfPage = memo(function PdfPage({
         "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)] [&_.textLayer_::selection]:!bg-[#2563EB]/30 [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
         activeTool !== "select" &&
           "[&_.textLayer]:!cursor-[inherit] [&_.textLayer_*]:!cursor-[inherit]",
+        isRagHighlighted &&
+          "ring-2 ring-[var(--accent-brand,#2563EB)] ring-offset-2 ring-offset-background",
       )}
     >
       {/* Persistent back-buffer canvas holds previous frame during async scale re-render */}
@@ -622,6 +696,44 @@ export const PdfPage = memo(function PdfPage({
           <MessageSquare size={14} strokeWidth={1.5} />
         </button>
       ))}
+
+      {/* Visual RAG Highlight Match Banner */}
+      {isRagHighlighted && activeRagHighlight && (
+        <div
+          role="status"
+          aria-label="RAG search highlight"
+          className="absolute top-3 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--accent-brand,#2563EB)]/40 bg-card/95 px-3 py-1 text-xs shadow-md backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 select-none"
+        >
+          <Sparkles size={13} className="text-[var(--accent-brand,#2563EB)] shrink-0" />
+          <span className="font-semibold text-foreground shrink-0">
+            RAG Match ({Math.round(activeRagHighlight.similarityScore * 100)}%)
+          </span>
+          <span className="max-w-[220px] truncate text-muted-foreground font-mono text-[11px] italic">
+            "{activeRagHighlight.text.slice(0, 90)}"
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              useAiStore.getState().setActiveRagHighlight(null);
+            }}
+            title="Dismiss RAG highlight"
+            className="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X size={11} strokeWidth={2} />
+          </button>
+        </div>
+      )}
+
+      {/* Floating text selection action popover (Search Web / Ask Lio) */}
+      {activeTool === "select" && selectionState && (
+        <SelectionActionBar
+          selectedText={selectionState.text}
+          pageNumber={pageNumber}
+          anchorRect={selectionState.rect}
+          onClose={() => setSelectionState(null)}
+        />
+      )}
     </div>
   );
 });
