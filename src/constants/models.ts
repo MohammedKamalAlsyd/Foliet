@@ -6,6 +6,7 @@ import type {
 import type { LlmProvider, LlmModelPreset } from "@/types/chat";
 import { AiSettings } from "@/services/storage/settings";
 
+
 export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]> = {
     "local-rust": [
         {
@@ -24,30 +25,43 @@ export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]
             description: "High performance compact retrieval model.",
         },
     ],
+
     voyage: [
         {
-            id: "voyage-3-lite",
-            label: "Voyage 3 Lite",
-            dimensions: 512,
+            id: "voyage-4-lite",
+            label: "Voyage 4 Lite",
+            dimensions: 1024,
             provider: "voyage",
-            description: "Optimized for low latency and cost-effective research retrieval.",
+            description:
+                "Low-cost, low-latency embeddings for book summarization pipelines, semantic search, and RAG.",
             isDefault: true,
         },
         {
-            id: "voyage-3",
-            label: "Voyage 3",
+            id: "voyage-4",
+            label: "Voyage 4",
             dimensions: 1024,
             provider: "voyage",
-            description: "State-of-the-art general embedding model.",
+            description:
+                "Balanced retrieval quality and performance for academic papers and multi-document search.",
+        },
+        {
+            id: "voyage-4-large",
+            label: "Voyage 4 Large",
+            dimensions: 1024,
+            provider: "voyage",
+            description:
+                "Premium general-purpose and multilingual embeddings for high-precision research retrieval.",
         },
     ],
+
     openai: [
         {
             id: "text-embedding-3-small",
             label: "Text Embedding 3 Small",
             dimensions: 1536,
             provider: "openai",
-            description: "Efficient cloud embeddings with wide utility.",
+            description:
+                "Affordable general-purpose embeddings for semantic search and large-scale document indexing.",
             isDefault: true,
         },
         {
@@ -55,115 +69,184 @@ export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]
             label: "Text Embedding 3 Large",
             dimensions: 3072,
             provider: "openai",
-            description: "Maximum precision cloud embedding model.",
+            description:
+                "High-quality multilingual embeddings for precise academic retrieval and complex RAG pipelines.",
         },
     ],
+
     ollama: [
         {
-            id: "nomic-embed-text",
-            label: "Nomic Embed Text",
-            dimensions: 768,
+            id: "qwen3-embedding:0.6b",
+            label: "Qwen3 Embedding 0.6B",
+            dimensions: 1024,
             provider: "ollama",
-            description: "Popular open embedding model hosted locally via Ollama.",
+            description:
+                "Excellent lightweight multilingual retrieval model with 32K context and configurable output dimensions.",
             isDefault: true,
         },
         {
-            id: "mxbai-embed-large",
-            label: "mxbai-embed-large",
+            id: "qwen3-embedding:4b",
+            label: "Qwen3 Embedding 4B",
+            dimensions: 2560,
+            provider: "ollama",
+            description:
+                "Higher-quality multilingual embeddings for academic research and demanding retrieval workloads.",
+        },
+        {
+            id: "bge-m3",
+            label: "BGE-M3",
             dimensions: 1024,
             provider: "ollama",
-            description: "High quality 1024-dimension local retrieval model.",
+            description:
+                "Multilingual retrieval model supporting dense, sparse, and multi-vector retrieval.",
+        },
+        {
+            id: "embeddinggemma",
+            label: "EmbeddingGemma",
+            dimensions: 768,
+            provider: "ollama",
+            description:
+                "Compact Google embedding model designed for efficient local semantic search.",
         },
     ],
 };
 
+
+
 export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
     openrouter: [
         {
-            id: "anthropic/claude-3.5-sonnet",
-            label: "Claude 3.5 Sonnet",
+            id: "deepseek/deepseek-v4.1-flash",
+            label: "DeepSeek V4.1 Flash",
             provider: "openrouter",
-            contextWindow: 200000,
-            description: "Leading model for academic reasoning, synthesis, and PDF analysis.",
+            contextWindow: 1048576,
+            description:
+                "Excellent cost-to-performance ratio for book summarization, extraction, and long-context analysis.",
             isDefault: true,
         },
         {
-            id: "meta-llama/llama-3.3-70b-instruct",
-            label: "Llama 3.3 70B",
+            id: "google/gemini-3.8-flash",
+            label: "Gemini 3.8 Flash",
             provider: "openrouter",
-            contextWindow: 128000,
-            description: "Open-weights model with strong research comprehension.",
+            contextWindow: 1048576,
+            description:
+                "Fast multimodal model for large PDFs, book summarization, and document synthesis.",
+        },
+        {
+            id: "anthropic/claude-haiku-5.5",
+            label: "Claude Haiku 5.5",
+            provider: "openrouter",
+            contextWindow: 1000000,
+            description:
+                "Fast and economical model for classification, extraction, and summarization.",
+        },
+        {
+            id: "anthropic/claude-sonnet-5.5",
+            label: "Claude Sonnet 5.5",
+            provider: "openrouter",
+            contextWindow: 1000000,
+            description:
+                "High-quality reasoning and synthesis for complex academic research.",
         },
     ],
+
     "google-ai-studio": [
         {
-            id: "gemini-1.5-pro",
-            label: "Gemini 1.5 Pro",
+            id: "gemini-3.8-flash",
+            label: "Gemini 3.8 Flash",
             provider: "google-ai-studio",
-            contextWindow: 2000000,
-            description: "Ultra-long context window suited for whole-book research.",
+            contextWindow: 1048576,
+            description:
+                "Fast, cost-effective model for book summarization, PDF analysis, and long-context research.",
             isDefault: true,
         },
-        {
-            id: "gemini-1.5-flash",
-            label: "Gemini 1.5 Flash",
-            provider: "google-ai-studio",
-            contextWindow: 1000000,
-            description: "Fast responses with 1M context capacity.",
-        },
     ],
+
     anthropic: [
         {
-            id: "claude-3-5-sonnet-latest",
-            label: "Claude 3.5 Sonnet",
+            id: "claude-haiku-5-5",
+            label: "Claude Haiku 5.5",
             provider: "anthropic",
-            contextWindow: 200000,
-            description: "High accuracy and scholarly analysis.",
+            contextWindow: 1000000,
+            description:
+                "Fastest economical option for document processing, extraction, and summarization.",
             isDefault: true,
         },
         {
-            id: "claude-3-5-haiku-latest",
-            label: "Claude 3.5 Haiku",
+            id: "claude-sonnet-5-5",
+            label: "Claude Sonnet 5.5",
             provider: "anthropic",
-            contextWindow: 200000,
-            description: "Rapid latency for quick queries and definitions.",
+            contextWindow: 1000000,
+            description:
+                "Strong analytical reasoning, academic writing, and multi-document synthesis.",
+        },
+        {
+            id: "claude-opus-5-5",
+            label: "Claude Opus 5.5",
+            provider: "anthropic",
+            contextWindow: 1000000,
+            description:
+                "Premium model for demanding research, complex reasoning, and deep analysis.",
         },
     ],
+
     openai: [
         {
-            id: "gpt-4o",
-            label: "GPT-4o",
+            id: "gpt-6-luna",
+            label: "GPT-6 Luna",
             provider: "openai",
-            contextWindow: 128000,
-            description: "Omni model for fast analysis and structured reasoning.",
+            contextWindow: 1048576,
+            description:
+                "Fast and economical model for summarization, extraction, and everyday research tasks.",
             isDefault: true,
         },
         {
-            id: "gpt-4o-mini",
-            label: "GPT-4o Mini",
+            id: "gpt-6.1-sol",
+            label: "GPT-6.1 Sol",
             provider: "openai",
-            contextWindow: 128000,
-            description: "Lightweight, low-latency queries.",
+            contextWindow: 1048576,
+            description:
+                "Advanced reasoning for academic research, complex synthesis, and analytical tasks.",
+        },
+        {
+            id: "gpt-6-astra",
+            label: "GPT-6 Astra",
+            provider: "openai",
+            contextWindow: 1048576,
+            description:
+                "Flagship reasoning model for the most demanding research and problem-solving tasks.",
         },
     ],
+
     ollama: [
         {
-            id: "llama3.2:latest",
-            label: "Llama 3.2 (3B)",
+            id: "gemma4:12b",
+            label: "Gemma 4 (12B)",
             provider: "ollama",
-            contextWindow: 128000,
-            description: "Local model for quick summarization on modest hardware.",
+            contextWindow: 262144,
+            description:
+                "Multimodal local model for document understanding, summarization, and general tasks.",
             isDefault: true,
         },
         {
-            id: "qwen2.5:7b",
-            label: "Qwen 2.5 (7B)",
+            id: "gemma4:31b",
+            label: "Gemma 4 (31B)",
             provider: "ollama",
-            contextWindow: 32000,
-            description: "Strong local reasoning for academic papers.",
+            contextWindow: 262144,
+            description:
+                "More capable local model for advanced reasoning and document synthesis.",
+        },
+        {
+            id: "qwen3.5:9b",
+            label: "Qwen 3.5 (9B)",
+            provider: "ollama",
+            contextWindow: 262144,
+            description:
+                "Efficient open-weight multimodal model for local reasoning and document processing.",
         },
     ],
 };
+
 
 export const DEFAULT_RAG_HYPERPARAMETERS: RagHyperparameters = {
     chunkSizeLines: 32,
