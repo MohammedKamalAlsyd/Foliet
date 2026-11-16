@@ -32,6 +32,42 @@ export interface RagPromptContextItem {
     docTitle?: string;
 }
 
+export type SummaryFocusMode = "executive" | "study" | "technical";
+
+export interface SummaryHighlightInput {
+    pageNumber: number;
+    toolType: "highlight" | "underline" | "strikethrough";
+    text: string;
+}
+
+export interface SummaryNoteInput {
+    pageNumber: number;
+    comment: string;
+    contextSnippet?: string;
+}
+
+export interface SummaryCropInput {
+    id: string;
+    pageNumber: number;
+    imageUrl: string;
+    caption?: string;
+}
+
+export interface SummaryChatTakeawayInput {
+    title: string;
+    excerpts: string[];
+}
+
+export interface StructuredSummaryInput {
+    docTitle: string;
+    focusMode: SummaryFocusMode;
+    highlights: SummaryHighlightInput[];
+    notes: SummaryNoteInput[];
+    crops: SummaryCropInput[];
+    chatTakeaways: SummaryChatTakeawayInput[];
+    fallbackExcerpt?: string;
+}
+
 const PROVIDER_NAMES: Record<LlmProvider, string> = {
     openrouter: "OpenRouter",
     openai: "OpenAI",
@@ -532,9 +568,125 @@ export class LlmService {
             contentSnippet ? `\nDOCUMENT EXCERPT / TEXT:\n${contentSnippet}` : "",
         ].join("\n");
     }
+
+    /**
+     * Constructs a personalized, source-anchored summarization prompt built around
+     * the user's selected highlights, underlines, personal notes, figure crops, and chat insights.
+     */
+    public static buildStructuredSummarizationPrompt(
+        input: StructuredSummaryInput
+    ): string {
+        const focusInstructions: Record<SummaryFocusMode, string> = {
+            executive: [
+                "FOCUS MODE: Executive Brief",
+                "Organize with clean Markdown headings:",
+                "1. `# <Concise Document Title>`",
+                "2. `## Thesis & Problem Statement`",
+                "3. `## Core Findings & Evidence` (anchored in the user's highlighted passages)",
+                "4. `## Methodology & Synthesis`",
+                "5. `## Limitations & Open Questions`",
+            ].join("\n"),
+            study: [
+                "FOCUS MODE: Study Notes",
+                "Organize with clean Markdown headings:",
+                "1. `# <Concise Study Title>`",
+                "2. `## Core Concepts & Definitions`",
+                "3. `## Detailed Walkthrough` (synthesized from the marked passages by theme or progression)",
+                "4. `## Marginalia & Resolved Questions` (directly addressing the user's personal notes and Lio chat takeaways)",
+                "5. `## Key Takeaways for Review`",
+            ].join("\n"),
+            technical: [
+                "FOCUS MODE: Technical & Code",
+                "Organize with clean Markdown headings:",
+                "1. `# <Concise Technical Title>`",
+                "2. `## System Architecture & Formalisms`",
+                "3. `## Algorithms, Equations & Code` (present algorithms, data structures, mathematical formulations, or implementations inside fenced code blocks with language tags)",
+                "4. `## Benchmarks & Empirical Results`",
+                "5. `## Implementation Notes & Trade-offs`",
+            ].join("\n"),
+        };
+
+        const highlightsBlock =
+            input.highlights.length > 0
+                ? input.highlights
+                    .map(
+                        (h, idx) =>
+                            `${idx + 1}. [Page ${h.pageNumber} · ${h.toolType}] "${h.text.trim()}"`
+                    )
+                    .join("\n")
+                : "(No text highlights or underlines selected.)";
+
+        const notesBlock =
+            input.notes.length > 0
+                ? input.notes
+                    .map((n, idx) => {
+                        const ctx = n.contextSnippet
+                            ? ` (Context: "${n.contextSnippet.trim()}")`
+                            : "";
+                        return `${idx + 1}. [Page ${n.pageNumber} · User Note] ${n.comment.trim()}${ctx}`;
+                    })
+                    .join("\n")
+                : "(No personal sticky notes selected.)";
+
+        const cropsBlock =
+            input.crops.length > 0
+                ? input.crops
+                    .map(
+                        (c, idx) =>
+                            `${idx + 1}. [Page ${c.pageNumber} · Figure Crop] URI: ${c.imageUrl}${c.caption ? ` | Caption: "${c.caption.trim()}"` : ""
+                            }`
+                    )
+                    .join("\n")
+                : "(No figure crops selected.)";
+
+        const chatsBlock =
+            input.chatTakeaways.length > 0
+                ? input.chatTakeaways
+                    .map(
+                        (c, idx) =>
+                            `Conversation ${idx + 1}: "${c.title}"\n${c.excerpts
+                                .map((e) => `  - ${e.trim()}`)
+                                .join("\n")}`
+                    )
+                    .join("\n\n")
+                : "(No Lio chat takeaways selected.)";
+
+        return [
+            `You are Foliet's scholarly research assistant synthesizing personal research notes for "${input.docTitle}".`,
+            "",
+            focusInstructions[input.focusMode],
+            "",
+            "STRICT SYNTHESIS RULES:",
+            "- ANCHOR ON USER MARKUPS: Center the entire document around the user's selected highlights, underlines, and personal sticky notes below. Synthesize, connect, and contextualize what the user marked rather than producing generic filler.",
+            "- PAGE CITATIONS: Cite page numbers inline consistently, e.g., `(Page 4)`.",
+            "- INTEGRATE CHAT INSIGHTS: Incorporate relevant answers or clarifications from the selected Lio Chat Takeaways naturally into the synthesis.",
+            "- FENCED CODE BLOCKS: Whenever explaining an algorithm, formula, protocol, pseudocode, or code structure, ALWAYS wrap it in a clean fenced code block with an explicit language tag (e.g., ```python, ```typescript, ```rust, ```latex, ```text).",
+            input.crops.length > 0
+                ? "- FIGURE CROPS (IMAGES): Embed the user's captured figure crops directly in the relevant sections on their own line using standard Markdown image syntax with the exact URI provided below, e.g., `![Concise figure description (Page X)](idb://crop-...)`. Never invent, modify, or shorten an image URI, and only reference URIs listed in USER FIGURE CROPS."
+                : "- Do not invent or emit image links.",
+            "- OUTPUT FORMAT: Output valid Markdown only. Do not include conversational preamble or meta-commentary.",
+            "",
+            "USER HIGHLIGHTED & UNDERLINED PASSAGES:",
+            highlightsBlock,
+            "",
+            "USER PERSONAL STICKY NOTES:",
+            notesBlock,
+            "",
+            "USER CAPTURED FIGURE CROPS:",
+            cropsBlock,
+            "",
+            "SAVED LIO CHAT TAKEAWAYS:",
+            chatsBlock,
+            input.fallbackExcerpt?.trim()
+                ? `\nADDITIONAL DOCUMENT EXCERPTS:\n${input.fallbackExcerpt.trim()}`
+                : "",
+        ].join("\n");
+    }
 }
 
 // Standalone function exports for convenience
 export const streamChat = LlmService.streamChat.bind(LlmService);
 export const buildRagSystemPrompt = LlmService.buildRagSystemPrompt.bind(LlmService);
 export const buildSummarizationPrompt = LlmService.buildSummarizationPrompt.bind(LlmService);
+export const buildStructuredSummarizationPrompt =
+    LlmService.buildStructuredSummarizationPrompt.bind(LlmService);

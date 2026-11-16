@@ -9,7 +9,11 @@
 import { create } from "zustand";
 import { SettingsStorage } from "@/services/storage/settings";
 import { DocumentDatabase } from "@/services/storage/database";
-import { LlmService } from "@/services/llm";
+import {
+    LlmService,
+    type StructuredSummaryInput,
+    type SummaryFocusMode,
+} from "@/services/llm";
 import { RagService } from "@/services/rag";
 import { useDocumentStore } from "@/stores/documentStore";
 import {
@@ -48,6 +52,8 @@ export interface AiStore extends AiConfigState {
     activeSummary: AiSummaryState | null;
     isLoadingSummary: boolean;
     isSummarizing: boolean;
+    isSummaryWorkspaceOpen: boolean;
+    summaryFocusMode: SummaryFocusMode;
 
     // Actions - Init & Settings
     initializeAiStore: () => Promise<void>;
@@ -77,8 +83,12 @@ export interface AiStore extends AiConfigState {
     cancelStreaming: () => void;
 
     // Actions - Summaries
+    setSummaryWorkspaceOpen: (open: boolean) => void;
+    setSummaryFocusMode: (mode: SummaryFocusMode) => void;
     loadSummary: (docId: string) => Promise<void>;
     generateSummary: (docId: string, docTitle: string, fullTextOrExcerpt: string) => Promise<void>;
+    generateStructuredSummary: (docId: string, input: StructuredSummaryInput) => Promise<void>;
+    cancelSummaryStreaming: () => void;
     deleteSummary: (docId: string) => Promise<void>;
 
     // Actions - Indexing & Catalog
@@ -127,8 +137,9 @@ const DEFAULT_API_KEYS: Record<LlmProvider, string> = {
     anthropic: "",
 };
 
-// Module-scoped abort controller for currently active chat completion stream
+// Module-scoped abort controllers for currently active streams
 let activeAbortController: AbortController | null = null;
+let activeSummaryAbortController: AbortController | null = null;
 
 export const useAiStore = create<AiStore>((set, get) => ({
     // LLM Config
@@ -179,6 +190,8 @@ export const useAiStore = create<AiStore>((set, get) => ({
     activeSummary: null,
     isLoadingSummary: false,
     isSummarizing: false,
+    isSummaryWorkspaceOpen: false,
+    summaryFocusMode: "study",
 
     // AI Studio UI State
     isAiStudioOpen: false,
@@ -532,8 +545,8 @@ export const useAiStore = create<AiStore>((set, get) => ({
             const finalContent = isAborted
                 ? accumulatedText
                 : accumulatedText.length > 0
-                ? `${accumulatedText}\n\n[Generation stopped: ${err?.message || "Unknown error"}]`
-                : `[Error: ${err?.message || "Generation failed"}]`;
+                    ? `${accumulatedText}\n\n[Generation stopped: ${err?.message || "Unknown error"}]`
+                    : `[Error: ${err?.message || "Generation failed"}]`;
 
             const finalConv: ChatConversation = {
                 ...convWithAssistant,
@@ -568,6 +581,14 @@ export const useAiStore = create<AiStore>((set, get) => ({
     // =========================================================================
     // Document Summaries
     // =========================================================================
+
+    setSummaryWorkspaceOpen: (open) => {
+        set({ isSummaryWorkspaceOpen: open });
+    },
+
+    setSummaryFocusMode: (mode) => {
+        set({ summaryFocusMode: mode });
+    },
 
     loadSummary: async (docId) => {
         set({ isLoadingSummary: true });
@@ -629,6 +650,104 @@ export const useAiStore = create<AiStore>((set, get) => ({
             set({ isSummarizing: false });
             throw err;
         }
+    },
+
+    generateStructuredSummary: async (docId, input) => {
+        if (activeSummaryAbortController) {
+            activeSummaryAbortController.abort();
+            activeSummaryAbortController = null;
+        }
+
+        const abortController = new AbortController();
+        activeSummaryAbortController = abortController;
+
+        const snapshot = JSON.stringify({
+            focusMode: input.focusMode,
+            highlights: input.highlights.length,
+            notes: input.notes.length,
+            crops: input.crops.length,
+            chats: input.chatTakeaways.length,
+        });
+
+        set({ isSummarizing: true });
+        let accumulated = "";
+
+        try {
+            const prompt = LlmService.buildStructuredSummarizationPrompt(input);
+            const provider = get().llmProvider;
+            const model = get().llmModel;
+            const apiKey = get().apiKeys[provider] ?? "";
+            const ollamaEndpoint = get().ollamaEndpoint;
+
+            await LlmService.streamChat({
+                messages: [
+                    {
+                        id: crypto.randomUUID(),
+                        role: "user",
+                        content: prompt,
+                        timestamp: Date.now(),
+                    },
+                ],
+                provider,
+                model,
+                apiKey,
+                ollamaEndpoint,
+                signal: abortController.signal,
+                onChunk: (chunk) => {
+                    accumulated += chunk;
+                    set({
+                        activeSummary: {
+                            content: accumulated,
+                            sourceSnapshot: snapshot,
+                            updatedAt: Date.now(),
+                        },
+                    });
+                },
+            });
+
+            await DocumentDatabase.saveSummary(docId, accumulated, snapshot);
+            set({
+                isSummarizing: false,
+                activeSummary: {
+                    content: accumulated,
+                    sourceSnapshot: snapshot,
+                    updatedAt: Date.now(),
+                },
+            });
+        } catch (err: any) {
+            const isAborted = err?.name === "AbortError" || abortController.signal.aborted;
+            if (isAborted) {
+                if (accumulated.trim().length > 0) {
+                    await DocumentDatabase.saveSummary(docId, accumulated, snapshot).catch(() => { });
+                    set({
+                        isSummarizing: false,
+                        activeSummary: {
+                            content: accumulated,
+                            sourceSnapshot: snapshot,
+                            updatedAt: Date.now(),
+                        },
+                    });
+                } else {
+                    set({ isSummarizing: false });
+                }
+                return;
+            }
+            console.error("AiStore: Structured summarization failed:", err);
+            set({ isSummarizing: false });
+            throw err;
+        } finally {
+            if (activeSummaryAbortController === abortController) {
+                activeSummaryAbortController = null;
+            }
+        }
+    },
+
+    cancelSummaryStreaming: () => {
+        if (activeSummaryAbortController) {
+            activeSummaryAbortController.abort();
+            activeSummaryAbortController = null;
+        }
+        set({ isSummarizing: false });
     },
 
     deleteSummary: async (docId) => {

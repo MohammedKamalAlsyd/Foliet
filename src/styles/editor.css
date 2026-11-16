@@ -1,0 +1,181 @@
+.foliet-docs-editor .ProseMirror {
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.foliet-docs-editor .ProseMirror > * + * {
+  margin-top: 12px;
+}
+
+.foliet-docs-editor .ProseMirror h1 {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  margin-top: 24px;
+  margin-bottom: 8px;
+}
+
+.foliet-docs-editor .ProseMirror h1:first-child {
+  margin-top: 0;
+}
+
+.foliet-docs-editor .ProseMirror h2 {
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--hairline);
+  margin-top: 20px;
+  margin-bottom: 8px;
+}
+
+.foliet-docs-editor .ProseMirror h3 {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
+
+.foliet-docs-editor .ProseMirror p {
+  color: var(--text-primary);
+}
+
+.foliet-docs-editor .ProseMirror strong {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.foliet-docs-editor .ProseMirror ul {
+  list-style-type: disc;
+  padding-left: 20px;
+}
+
+.foliet-docs-editor .ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 20px;
+}
+
+.foliet-docs-editor .ProseMirror li + li {
+  margin-top: 4px;
+}
+
+.foliet-docs-editor .ProseMirror blockquote {
+  border-left: 2px solid var(--accent-brand);
+  padding-left: 16px;
+  color: var(--text-secondary);
+  margin: 12px 0;
+}
+
+.foliet-docs-editor .ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--hairline);
+  margin: 20px 0;
+}
+
+.foliet-docs-editor .ProseMirror code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background-color: var(--bg-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--text-primary);
+}
+
+.foliet-docs-editor .ProseMirror pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 20px;
+  background-color: var(--bg-deep);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 12px 16px;
+  overflow-x: auto;
+  color: var(--text-primary);
+}
+
+.foliet-docs-editor .ProseMirror pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+}
+
+/* Lowlight syntax tokens — Light */
+.foliet-docs-editor .hljs-comment,
+.foliet-docs-editor .hljs-quote {
+  color: #737373;
+}
+
+.foliet-docs-editor .hljs-keyword,
+.foliet-docs-editor .hljs-selector-tag,
+.foliet-docs-editor .hljs-subst {
+  color: #b44327;
+}
+
+.foliet-docs-editor .hljs-number,
+.foliet-docs-editor .hljs-literal,
+.foliet-docs-editor .hljs-variable,
+.foliet-docs-editor .hljs-template-variable {
+  color: #0369a1;
+}
+
+.foliet-docs-editor .hljs-string,
+.foliet-docs-editor .hljs-doctag {
+  color: #15803d;
+}
+
+.foliet-docs-editor .hljs-title,
+.foliet-docs-editor .hljs-section,
+.foliet-docs-editor .hljs-built_in {
+  color: #6d28d9;
+}
+
+.foliet-docs-editor .hljs-type,
+.foliet-docs-editor .hljs-class .hljs-title {
+  color: #b45309;
+}
+
+/* Lowlight syntax tokens — Dark */
+.dark .foliet-docs-editor .hljs-comment,
+.dark .foliet-docs-editor .hljs-quote {
+  color: #85858b;
+}
+
+.dark .foliet-docs-editor .hljs-keyword,
+.dark .foliet-docs-editor .hljs-selector-tag,
+.dark .foliet-docs-editor .hljs-subst {
+  color: #df6a47;
+}
+
+.dark .foliet-docs-editor .hljs-number,
+.dark .foliet-docs-editor .hljs-literal,
+.dark .foliet-docs-editor .hljs-variable,
+.dark .foliet-docs-editor .hljs-template-variable {
+  color: #60a5fa;
+}
+
+.dark .foliet-docs-editor .hljs-string,
+.dark .foliet-docs-editor .hljs-doctag {
+  color: #4cc38a;
+}
+
+.dark .foliet-docs-editor .hljs-title,
+.dark .foliet-docs-editor .hljs-section,
+.dark .foliet-docs-editor .hljs-built_in {
+  color: #c4b5fd;
+}
+
+.dark .foliet-docs-editor .hljs-type,
+.dark .foliet-docs-editor .hljs-class .hljs-title {
+  color: #fbbf24;
+}

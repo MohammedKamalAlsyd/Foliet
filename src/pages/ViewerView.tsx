@@ -142,6 +142,11 @@ export function ViewerView() {
     markSaved,
   } = useUndoRedo<PdfAnnotation[]>([]);
 
+  const studioAnnotations = useMemo(
+    () => [...annotations, ...cropAnnotations],
+    [annotations, cropAnnotations],
+  );
+
   const pdfSource = useMemo(
     () => getActivePdfSource(activeDoc),
     [activeDoc?.filePath],
@@ -1172,6 +1177,7 @@ export function ViewerView() {
         <AiStudioSidebar
           isOpen={isAiStudioOpen}
           onJumpToPage={jumpToPage}
+          annotations={studioAnnotations}
         />
       </div>
 
