@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,13 +20,24 @@ export function NoteEditorPortal({
   onUpdateNote,
   onDeleteNote,
 }: NoteEditorPortalProps) {
+  const cardRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!note) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
+    const onPointerDown = (e: PointerEvent) => {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
   }, [note, onClose]);
 
   if (!note || !anchorPos) return null;
@@ -44,6 +55,7 @@ export function NoteEditorPortal({
 
   return createPortal(
     <div
+      ref={cardRef}
       style={{ left, top, width }}
       className="fixed z-50 flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-[var(--shadow-float)]"
     >
@@ -63,7 +75,10 @@ export function NoteEditorPortal({
             type="button"
             variant="ghost"
             size="icon-xs"
-            onClick={() => onDeleteNote(note.id)}
+            onClick={() => {
+              onDeleteNote(note.id);
+              onClose();
+            }}
             aria-label="Delete note"
             className="h-6 w-6 text-muted-foreground hover:text-destructive"
           >

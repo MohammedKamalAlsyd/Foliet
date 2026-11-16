@@ -725,6 +725,7 @@ export function ViewerView() {
       toast.success("Saved");
       return true;
     } catch (err: any) {
+      console.error("Failed to save PDF", err);
       toast.error(err?.message || "Failed to save PDF");
       return false;
     }

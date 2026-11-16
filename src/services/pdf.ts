@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { exists, readFile, writeFile } from "@tauri-apps/plugin-fs";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { BurnableAnnotation } from "@/types/annotations";
 import type { PdfOpenResult, PdfOutlineNode } from "@/types/document";
@@ -36,34 +35,17 @@ export class PdfService {
         );
     }
 
-    private static async burnBytes(
-        sourcePath: string,
-        annotations: BurnableAnnotation[],
-        originalBuffer?: ArrayBuffer | null,
-    ): Promise<Uint8Array> {
-        if (!sourcePath) throw new Error("No file path provided.");
-        if (!originalBuffer && !(await exists(sourcePath))) {
-            throw new Error(`Target file "${sourcePath}" no longer exists on disk.`);
-        }
-
-        const pdfBytes = originalBuffer
-            ? new Uint8Array(originalBuffer)
-            : await readFile(sourcePath);
-
-        const resultBytes = await invoke<number[] | Uint8Array>("export_pdf", {
-            pdfBytes,
-            annotations,
-        });
-        return new Uint8Array(resultBytes);
-    }
-
     static async burnAndSave(
         filePath: string,
         annotations: BurnableAnnotation[],
-        originalBuffer?: ArrayBuffer | null,
+        _originalBuffer?: ArrayBuffer | null,
     ): Promise<void> {
-        const bytes = await this.burnBytes(filePath, annotations, originalBuffer);
-        await writeFile(filePath, bytes);
+        if (!filePath) throw new Error("No file path provided.");
+        await invoke("export_pdf", {
+            sourcePath: filePath,
+            targetPath: filePath,
+            annotations,
+        });
     }
 
     /** Exports an annotated copy to a user-selected path via the `export_pdf` IPC command. */
@@ -71,8 +53,9 @@ export class PdfService {
         sourcePath: string,
         annotations: BurnableAnnotation[],
         defaultName = "annotated.pdf",
-        originalBuffer?: ArrayBuffer | null,
+        _originalBuffer?: ArrayBuffer | null,
     ): Promise<string | null> {
+        if (!sourcePath) throw new Error("No file path provided.");
         const targetPath = await save({
             defaultPath: defaultName.endsWith(".pdf")
                 ? defaultName
@@ -81,8 +64,11 @@ export class PdfService {
         });
         if (!targetPath) return null;
 
-        const bytes = await this.burnBytes(sourcePath, annotations, originalBuffer);
-        await writeFile(targetPath, bytes);
+        await invoke("export_pdf", {
+            sourcePath,
+            targetPath,
+            annotations,
+        });
         return targetPath;
     }
 

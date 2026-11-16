@@ -48,6 +48,99 @@ const pointsToSvgPath = (points: Point[]) =>
     .map((p, i) => `${i === 0 ? "M" : "L"} ${p.x * 1000} ${p.y * 1000}`)
     .join(" ");
 
+type RectSegment = { x: number; y: number; width: number; height: number };
+
+const mergeRectSegments = (rects: RectSegment[]): RectSegment[] => {
+  if (rects.length <= 1) return rects;
+  const sorted = [...rects].sort((a, b) =>
+    Math.abs(a.y - b.y) > 0.004 ? a.y - b.y : a.x - b.x,
+  );
+  const merged: RectSegment[] = [];
+  for (const r of sorted) {
+    const target = merged.find((m) => {
+      const overlapY =
+        Math.min(m.y + m.height, r.y + r.height) - Math.max(m.y, r.y);
+      const minH = Math.min(m.height, r.height);
+      const sameLine = minH > 0 && overlapY / minH > 0.5;
+      const horizontalTouch =
+        r.x <= m.x + m.width + 0.008 && m.x <= r.x + r.width + 0.008;
+      return sameLine && horizontalTouch;
+    });
+    if (target) {
+      const minX = Math.min(target.x, r.x);
+      const minY = Math.min(target.y, r.y);
+      const maxX = Math.max(target.x + target.width, r.x + r.width);
+      const maxY = Math.max(target.y + target.height, r.y + r.height);
+      target.x = minX;
+      target.y = minY;
+      target.width = maxX - minX;
+      target.height = maxY - minY;
+    } else {
+      merged.push({ ...r });
+    }
+  }
+  return merged;
+};
+
+const svgCursor = (svg: string, x: number, y: number, fallback: string) =>
+  `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${x} ${y}, ${fallback}`;
+
+function getToolCursor(tool: ToolType, color: string): string | undefined {
+  switch (tool) {
+    case "freehand_write":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z' fill='white' stroke='#18181b' stroke-width='1.6' stroke-linejoin='round'/><path d='m14 6 4 4' stroke='${color}' stroke-width='2.4'/></svg>`,
+        2,
+        21,
+        "crosshair",
+      );
+    case "highlight":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='m9 11-6 6v3h3l6-6' fill='${color}' fill-opacity='0.9' stroke='#18181b' stroke-width='1.5' stroke-linejoin='round'/><path d='m20 7-5-5-8 8 5 5 8-8Z' fill='white' stroke='#18181b' stroke-width='1.5' stroke-linejoin='round'/></svg>`,
+        3,
+        20,
+        "text",
+      );
+    case "underline":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='M9 4h6M9 17h6M12 4v13' stroke='#18181b' stroke-width='1.7' stroke-linecap='round'/><path d='M5 20.5h14' stroke='${color}' stroke-width='2.6' stroke-linecap='round'/></svg>`,
+        12,
+        11,
+        "text",
+      );
+    case "strikethrough":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='M9 4h6M9 20h6M12 4v16' stroke='#18181b' stroke-width='1.7' stroke-linecap='round'/><path d='M4 12h16' stroke='${color}' stroke-width='2.6' stroke-linecap='round'/></svg>`,
+        12,
+        12,
+        "text",
+      );
+    case "popup_note":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4V5Z' fill='${color}' stroke='#18181b' stroke-width='1.5' stroke-linejoin='round'/><path d='M8 8h8M8 12h5' stroke='white' stroke-width='1.5' stroke-linecap='round'/></svg>`,
+        4,
+        20,
+        "cell",
+      );
+    case "eraser":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21H7Z' fill='white' stroke='#18181b' stroke-width='1.5' stroke-linejoin='round'/><path d='m5.5 11.5 7 7' stroke='#dc2626' stroke-width='1.5'/><path d='M3 21h18' stroke='#18181b' stroke-width='1.5' stroke-linecap='round'/></svg>`,
+        5,
+        19,
+        "pointer",
+      );
+    case "area_select":
+      return svgCursor(
+        `<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none'><path d='M12 4v16M4 12h16' stroke='#18181b' stroke-width='1.6' stroke-linecap='round'/><circle cx='12' cy='12' r='2.2' fill='${color}' stroke='#18181b' stroke-width='1.2'/></svg>`,
+        12,
+        12,
+        "crosshair",
+      );
+    default:
+      return undefined;
+  }
+}
+
 export const PdfPage = memo(function PdfPage({
   pageNumber,
   zoomLevel,
@@ -100,6 +193,11 @@ export const PdfPage = memo(function PdfPage({
     return { textMarkups, inkAnnotations, noteAnnotations };
   }, [pageAnnotations]);
 
+  const toolCursor = useMemo(
+    () => getToolCursor(activeTool, activeColor),
+    [activeTool, activeColor],
+  );
+
   const normalizePoint = useCallback(
     (clientX: number, clientY: number): Point | null => {
       const rect = wrapperRef.current?.getBoundingClientRect();
@@ -134,14 +232,16 @@ export const PdfPage = memo(function PdfPage({
     const range = selection.getRangeAt(0);
     if (!wrapper.contains(range.commonAncestorContainer)) return;
 
-    const rectSegments = Array.from(range.getClientRects())
-      .map((r) => ({
-        x: Math.max(0, (r.left - pageRect.left) / pageRect.width),
-        y: Math.max(0, (r.top - pageRect.top) / pageRect.height),
-        width: Math.min(1, r.width / pageRect.width),
-        height: Math.min(1, r.height / pageRect.height),
-      }))
-      .filter((r) => r.width > 0.002 && r.height > 0.002);
+    const rectSegments = mergeRectSegments(
+      Array.from(range.getClientRects())
+        .map((r) => ({
+          x: Math.max(0, (r.left - pageRect.left) / pageRect.width),
+          y: Math.max(0, (r.top - pageRect.top) / pageRect.height),
+          width: Math.min(1, r.width / pageRect.width),
+          height: Math.min(1, r.height / pageRect.height),
+        }))
+        .filter((r) => r.width > 0.002 && r.height > 0.002),
+    );
 
     selection.removeAllRanges();
     if (rectSegments.length === 0) return;
@@ -325,12 +425,12 @@ export const PdfPage = memo(function PdfPage({
       style={{
         width: Math.round(baseWidth * scale),
         height: Math.round(baseHeight * scale),
+        cursor: toolCursor,
       }}
       className={cn(
-        "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)]",
-        (activeTool === "freehand_write" || activeTool === "area_select") &&
-          "cursor-crosshair",
-        activeTool === "popup_note" && "cursor-cell",
+        "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)] [&_.textLayer_::selection]:!bg-[#2563EB]/30 [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
+        activeTool !== "select" &&
+          "[&_.textLayer]:!cursor-[inherit] [&_.textLayer_*]:!cursor-[inherit]",
       )}
     >
       {/* Persistent back-buffer canvas holds previous frame during async scale re-render */}
@@ -368,64 +468,74 @@ export const PdfPage = memo(function PdfPage({
 
       {/* Rendered text markups */}
       <div className="pointer-events-none absolute inset-0 z-10">
-        {textMarkups.map((annot) =>
-          annot.rectSegments.map((seg, idx) => (
-            <div
-              key={`${annot.id}-${idx}`}
-              onClick={
-                isEraser ? () => onDeleteAnnotation(annot.id) : undefined
-              }
-              style={{
-                left: `${seg.x * 100}%`,
-                top: `${seg.y * 100}%`,
-                width: `${seg.width * 100}%`,
-                height: `${seg.height * 100}%`,
-              }}
-              className={cn(
-                "absolute",
-                isEraser &&
-                  "pointer-events-auto cursor-pointer hover:opacity-60",
-              )}
-            >
-              {annot.toolType === "highlight" && (
-                <div
-                  className="h-full w-full rounded-[2px] opacity-35 mix-blend-multiply"
-                  style={{ backgroundColor: annot.color }}
-                />
-              )}
-              {annot.toolType === "strikethrough" && (
-                <div
-                  className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
-                  style={{ backgroundColor: annot.color }}
-                />
-              )}
-              {annot.toolType === "underline" &&
-                (annot.underlineStyle === "squiggle" ? (
-                  <svg
-                    viewBox="0 0 100 8"
-                    preserveAspectRatio="none"
-                    className="absolute inset-x-0 bottom-0 h-[4px] w-full"
-                  >
-                    <path
-                      d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
-                      fill="none"
-                      stroke={annot.color}
-                      strokeWidth="2"
-                    />
-                  </svg>
-                ) : (
+        {textMarkups.map((annot) => (
+          <div
+            key={annot.id}
+            className={cn(
+              "pointer-events-none absolute inset-0",
+              annot.toolType === "highlight" && "opacity-40 mix-blend-multiply",
+            )}
+          >
+            {annot.rectSegments.map((seg, idx) => (
+              <div
+                key={`${annot.id}-${idx}`}
+                onClick={
+                  isEraser ? () => onDeleteAnnotation(annot.id) : undefined
+                }
+                style={{
+                  left: `${seg.x * 100}%`,
+                  top: `${seg.y * 100}%`,
+                  width: `${seg.width * 100}%`,
+                  height: `${seg.height * 100}%`,
+                }}
+                className={cn(
+                  "absolute",
+                  isEraser &&
+                    "pointer-events-auto cursor-[inherit] hover:opacity-60",
+                )}
+              >
+                {annot.toolType === "highlight" && (
                   <div
-                    className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
-                    style={{
-                      borderColor: annot.color,
-                      borderStyle:
-                        annot.underlineStyle === "dashed" ? "dashed" : "solid",
-                    }}
+                    className="h-full w-full rounded-[2px]"
+                    style={{ backgroundColor: annot.color }}
                   />
-                ))}
-            </div>
-          )),
-        )}
+                )}
+                {annot.toolType === "strikethrough" && (
+                  <div
+                    className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
+                    style={{ backgroundColor: annot.color }}
+                  />
+                )}
+                {annot.toolType === "underline" &&
+                  (annot.underlineStyle === "squiggle" ? (
+                    <svg
+                      viewBox="0 0 100 8"
+                      preserveAspectRatio="none"
+                      className="absolute inset-x-0 bottom-0 h-[4px] w-full"
+                    >
+                      <path
+                        d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
+                        fill="none"
+                        stroke={annot.color}
+                        strokeWidth="2"
+                      />
+                    </svg>
+                  ) : (
+                    <div
+                      className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
+                      style={{
+                        borderColor: annot.color,
+                        borderStyle:
+                          annot.underlineStyle === "dashed"
+                            ? "dashed"
+                            : "solid",
+                      }}
+                    />
+                  ))}
+              </div>
+            ))}
+          </div>
+        ))}
       </div>
 
       {/* Rendered SVG ink strokes */}
@@ -446,7 +556,8 @@ export const PdfPage = memo(function PdfPage({
             vectorEffect="non-scaling-stroke"
             onClick={isEraser ? () => onDeleteAnnotation(annot.id) : undefined}
             className={cn(
-              isEraser && "pointer-events-auto cursor-pointer hover:opacity-50",
+              isEraser &&
+                "pointer-events-auto cursor-[inherit] hover:opacity-50",
             )}
           />
         ))}
@@ -503,7 +614,10 @@ export const PdfPage = memo(function PdfPage({
             top: `${note.y * 100}%`,
             backgroundColor: note.color,
           }}
-          className="absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-md border border-black/15 text-black shadow-[var(--shadow-sm)] transition-colors duration-150 ease-[var(--ease-foliet)]"
+          className={cn(
+            "absolute z-30 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-md border border-black/15 text-black shadow-[var(--shadow-sm)] transition-colors duration-150 ease-[var(--ease-foliet)]",
+            isEraser ? "cursor-[inherit]" : "cursor-pointer",
+          )}
         >
           <MessageSquare size={14} strokeWidth={1.5} />
         </button>

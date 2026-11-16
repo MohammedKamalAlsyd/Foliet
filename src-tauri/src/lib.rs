@@ -1,22 +1,49 @@
+mod pdf_exporter;
 mod pdf_models;
 mod pdf_reader;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use pdf_models::AnnotationDto;
-use tauri::http::{header, Response, StatusCode};
+use tauri::http::{Response, StatusCode, header};
 
-static FILE_POOL: OnceLock<Mutex<Vec<(PathBuf, u64, File)>>> = OnceLock::new();
+enum CachedPdfData {
+    File(File),
+    Memory(Arc<Vec<u8>>),
+}
 
-fn take_cached_file(path: &Path) -> Result<(File, u64), StatusCode> {
+struct CachedPdf {
+    path: PathBuf,
+    total: u64,
+    data: CachedPdfData,
+}
+
+static FILE_POOL: OnceLock<Mutex<Vec<CachedPdf>>> = OnceLock::new();
+
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        a.to_string_lossy()
+            .eq_ignore_ascii_case(&b.to_string_lossy())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        a == b
+    }
+}
+
+fn take_cached_pdf(path: &Path) -> Result<(CachedPdfData, u64), StatusCode> {
     let pool = FILE_POOL.get_or_init(|| Mutex::new(Vec::with_capacity(8)));
     if let Ok(mut guard) = pool.lock() {
-        if let Some(pos) = guard.iter().position(|(p, _, _)| p == path) {
-            let (_, total, file) = guard.swap_remove(pos);
-            return Ok((file, total));
+        if let Some(pos) = guard.iter().position(|c| same_path(&c.path, path)) {
+            if let CachedPdfData::Memory(ref bytes) = guard[pos].data {
+                return Ok((CachedPdfData::Memory(Arc::clone(bytes)), guard[pos].total));
+            }
+            let entry = guard.swap_remove(pos);
+            return Ok((entry.data, entry.total));
         }
     }
 
@@ -25,16 +52,53 @@ fn take_cached_file(path: &Path) -> Result<(File, u64), StatusCode> {
         .metadata()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .len();
-    Ok((file, total))
+
+    if let Some(clean_bytes) = pdf_exporter::strip_visual_annotations(path) {
+        let arc = Arc::new(clean_bytes);
+        let clean_total = arc.len() as u64;
+        if let Ok(mut guard) = pool.lock() {
+            if !guard.iter().any(|c| same_path(&c.path, path)) {
+                if guard.len() >= 8 {
+                    guard.remove(0);
+                }
+                guard.push(CachedPdf {
+                    path: path.to_path_buf(),
+                    total: clean_total,
+                    data: CachedPdfData::Memory(Arc::clone(&arc)),
+                });
+            }
+        }
+        return Ok((CachedPdfData::Memory(arc), clean_total));
+    }
+
+    Ok((CachedPdfData::File(file), total))
 }
 
-fn return_cached_file(path: PathBuf, total: u64, file: File) {
+fn return_cached_file(path: PathBuf, total: u64, data: CachedPdfData) {
+    let CachedPdfData::File(file) = data else {
+        return;
+    };
     if let Some(pool) = FILE_POOL.get() {
         if let Ok(mut guard) = pool.lock() {
+            if guard.iter().any(|c| same_path(&c.path, &path)) {
+                return;
+            }
             if guard.len() >= 8 {
                 guard.remove(0);
             }
-            guard.push((path, total, file));
+            guard.push(CachedPdf {
+                path,
+                total,
+                data: CachedPdfData::File(file),
+            });
+        }
+    }
+}
+
+fn evict_cached_file(path: &Path) {
+    if let Some(pool) = FILE_POOL.get() {
+        if let Ok(mut guard) = pool.lock() {
+            guard.retain(|c| !same_path(&c.path, path));
         }
     }
 }
@@ -119,7 +183,7 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
             .unwrap_or_default();
     }
 
-    let (mut file, total) = match take_cached_file(&path) {
+    let (mut data, total) = match take_cached_pdf(&path) {
         Ok(res) => res,
         Err(status) => {
             return Response::builder()
@@ -130,7 +194,7 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
     };
 
     if method == "HEAD" {
-        return_cached_file(path, total, file);
+        return_cached_file(path, total, data);
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "application/pdf")
@@ -148,9 +212,17 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
     if let Some(range_str) = range_hdr {
         if let Some((start, end)) = parse_range_header(range_str, total) {
             let len = (end - start + 1) as usize;
-            let mut buf = vec![0u8; len];
-            if file.seek(SeekFrom::Start(start)).is_ok() && file.read_exact(&mut buf).is_ok() {
-                return_cached_file(path, total, file);
+            let buf_opt = match &mut data {
+                CachedPdfData::Memory(arc) => Some(arc[start as usize..=end as usize].to_vec()),
+                CachedPdfData::File(file) => {
+                    let mut buf = vec![0u8; len];
+                    (file.seek(SeekFrom::Start(start)).is_ok() && file.read_exact(&mut buf).is_ok())
+                        .then_some(buf)
+                }
+            };
+
+            if let Some(buf) = buf_opt {
+                return_cached_file(path, total, data);
                 return Response::builder()
                     .status(StatusCode::PARTIAL_CONTENT)
                     .header(header::CONTENT_TYPE, "application/pdf")
@@ -169,7 +241,7 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
                     .unwrap_or_default();
             }
         }
-        return_cached_file(path, total, file);
+        return_cached_file(path, total, data);
         return Response::builder()
             .status(StatusCode::RANGE_NOT_SATISFIABLE)
             .header(header::CONTENT_RANGE, format!("bytes */{}", total))
@@ -177,10 +249,16 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
             .unwrap_or_default();
     }
 
-    let mut buf = Vec::with_capacity(total as usize);
-    let _ = file.seek(SeekFrom::Start(0));
-    let _ = file.read_to_end(&mut buf);
-    return_cached_file(path, total, file);
+    let buf = match &mut data {
+        CachedPdfData::Memory(arc) => arc.as_ref().clone(),
+        CachedPdfData::File(file) => {
+            let mut buf = Vec::with_capacity(total as usize);
+            let _ = file.seek(SeekFrom::Start(0));
+            let _ = file.read_to_end(&mut buf);
+            buf
+        }
+    };
+    return_cached_file(path, total, data);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/pdf")
@@ -197,10 +275,28 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
 
 #[tauri::command]
 async fn export_pdf(
-    _pdf_bytes: Vec<u8>,
-    _annotations: Vec<AnnotationDto>,
-) -> Result<Vec<u8>, String> {
-    Err("PDF exporter has not been ported yet.".to_string())
+    source_path: String,
+    target_path: String,
+    annotations: Vec<AnnotationDto>,
+) -> Result<(), String> {
+    if source_path.trim().is_empty() || target_path.trim().is_empty() {
+        return Err("Source and target paths cannot be empty.".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = PathBuf::from(&source_path);
+        let dst = PathBuf::from(&target_path);
+
+        let output = pdf_exporter::burn_annotations_with_lopdf(&src, &annotations)?;
+
+        evict_cached_file(&src);
+        evict_cached_file(&dst);
+
+        std::fs::write(&dst, output)
+            .map_err(|e| format!("Failed to write '{}': {}", target_path, e))
+    })
+    .await
+    .map_err(|e| format!("Export thread panicked: {:?}", e))?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

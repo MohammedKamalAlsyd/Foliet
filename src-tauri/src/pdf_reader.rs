@@ -2,74 +2,14 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use lopdf::{Dictionary, Document, Object, ObjectId};
+use lopdf::{Dictionary, Document, Object};
 use sha2::{Digest, Sha256};
 
+use crate::pdf_exporter::geometry::{PageGeometry, pdf_point_to_normalized};
 use crate::pdf_models::{AnnotationDto, BoundingBox, PdfOpenResult, Point};
 
 const HEAD_SAMPLE_BYTES: usize = 65_536;
 const TAIL_SAMPLE_BYTES: u64 = 16_384;
-
-#[derive(Clone, Copy)]
-struct PageGeometry {
-    llx: f32,
-    lly: f32,
-    width: f32,
-    height: f32,
-    rotate: i64,
-}
-
-impl PageGeometry {
-    fn from_page(doc: &Document, page_id: ObjectId) -> Self {
-        let box_arr = Self::find_box(doc, page_id, b"CropBox")
-            .or_else(|| Self::find_box(doc, page_id, b"MediaBox"))
-            .unwrap_or([0.0, 0.0, 612.0, 792.0]);
-
-        let rotate = doc
-            .get_object(page_id)
-            .and_then(|o| o.as_dict())
-            .ok()
-            .and_then(|d| d.get(b"Rotate").ok())
-            .and_then(|o| o.as_i64().ok())
-            .unwrap_or(0)
-            .rem_euclid(360);
-
-        Self {
-            llx: box_arr[0].min(box_arr[2]),
-            lly: box_arr[1].min(box_arr[3]),
-            width: (box_arr[2] - box_arr[0]).abs().max(1.0),
-            height: (box_arr[3] - box_arr[1]).abs().max(1.0),
-            rotate,
-        }
-    }
-
-    fn find_box(doc: &Document, mut obj_id: ObjectId, key: &[u8]) -> Option<[f32; 4]> {
-        for _ in 0..16 {
-            let dict = doc.get_object(obj_id).and_then(|o| o.as_dict()).ok()?;
-            if let Ok(Object::Array(arr)) = dict.get(key) {
-                let nums: Vec<f32> = arr.iter().filter_map(|v| v.as_float().ok()).collect();
-                if nums.len() == 4 {
-                    return Some([nums[0], nums[1], nums[2], nums[3]]);
-                }
-            }
-            obj_id = dict.get(b"Parent").and_then(|o| o.as_reference()).ok()?;
-        }
-        None
-    }
-}
-
-fn pdf_point_to_normalized(px: f32, py: f32, geom: PageGeometry) -> Option<(f32, f32)> {
-    let u = ((px - geom.llx) / geom.width).clamp(0.0, 1.0);
-    let v = ((py - geom.lly) / geom.height).clamp(0.0, 1.0);
-
-    let (nx, ny) = match geom.rotate {
-        90 => (1.0 - v, 1.0 - u),
-        180 => (1.0 - u, v),
-        270 => (v, u),
-        _ => (u, 1.0 - v),
-    };
-    Some((nx.clamp(0.0, 1.0), ny.clamp(0.0, 1.0)))
-}
 
 fn extract_tail_trailer_id(tail: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(tail);
@@ -83,6 +23,19 @@ fn extract_tail_trailer_id(tail: &[u8]) -> Option<String> {
     } else {
         None
     }
+}
+
+pub fn compute_fast_doc_id_from_path(path: &Path) -> Result<String, String> {
+    let mut file =
+        File::open(path).map_err(|e| format!("Failed to open '{}': {}", path.display(), e))?;
+    let file_size = file
+        .metadata()
+        .map_err(|e| format!("Failed to read metadata for '{}': {}", path.display(), e))?
+        .len();
+    if file_size == 0 {
+        return Err(format!("PDF file '{}' is empty (0 bytes).", path.display()));
+    }
+    compute_fast_doc_id(&mut file, file_size)
 }
 
 fn compute_fast_doc_id(file: &mut File, file_size: u64) -> Result<String, String> {
@@ -271,9 +224,11 @@ fn parse_annotation(
         if let Ok(Object::Array(r)) = annot_dict.get(b"Rect") {
             let coords: Vec<f32> = r.iter().filter_map(|v| v.as_float().ok()).collect();
             if coords.len() == 4 {
-                if let Some((nx, ny)) =
-                    pdf_point_to_normalized((coords[0] + coords[2]) / 2.0, coords[1], geometry)
-                {
+                if let Some((nx, ny)) = pdf_point_to_normalized(
+                    (coords[0] + coords[2]) / 2.0,
+                    (coords[1] + coords[3]) / 2.0,
+                    geometry,
+                ) {
                     note_x = Some(nx);
                     note_y = Some(ny);
                 }
