@@ -29,7 +29,11 @@ export interface CitationReference {
     snippet: string;
 }
 
-export type ToolCallName = "navigate_to" | "highlight_passage" | "explain_figure";
+export type ToolCallName =
+    | "navigate_to"
+    | "highlight_passage"
+    | "explain_figure"
+    | "add_figure_to_summary";
 
 export interface ExecutedToolCall {
     id: string;

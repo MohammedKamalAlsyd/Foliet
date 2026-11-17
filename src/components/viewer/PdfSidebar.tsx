@@ -431,7 +431,22 @@ export function PdfSidebar({
               {crops.map((crop) => (
                 <div
                   key={crop.id}
-                  className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-2 transition-colors duration-150 ease-[var(--ease-foliet)] hover:border-[var(--hairline-strong)]"
+                  draggable
+                  onDragStart={(e) => {
+                    const src = crop.imageUrl.startsWith("idb://")
+                      ? crop.imageUrl
+                      : `idb://${crop.id}`;
+                    const alt =
+                      crop.caption || `Figure (Page ${crop.pageNumber})`;
+                    e.dataTransfer.setData(
+                      "application/x-foliet-crop",
+                      JSON.stringify({ src, alt }),
+                    );
+                    e.dataTransfer.setData("text/plain", `![${alt}](${src})`);
+                    e.dataTransfer.effectAllowed = "copy";
+                  }}
+                  title="Click to jump · Drag into Living Summary"
+                  className="group flex cursor-grab flex-col gap-2 rounded-xl border border-border bg-card p-2 transition-colors duration-150 ease-[var(--ease-foliet)] hover:border-[var(--hairline-strong)] active:cursor-grabbing"
                 >
                   <button
                     type="button"

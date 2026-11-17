@@ -3,10 +3,14 @@
  *
  * Manages SQLite-backed conversations, selection context handoff,
  * RAG-grounded prompt injection, LLM tool execution (`navigate_to`,
- * `highlight_passage`, `explain_figure`), and abortable LLM streaming.
+ * `highlight_passage`, `explain_figure`, `add_figure_to_summary`), and abortable LLM streaming.
  */
 
 import { create } from "zustand";
+import {
+    captureFigureCropFromPage,
+    insertFigureIntoSummary,
+} from "@/services/figureCropper";
 import {
     FOLIET_TOOL_DEFINITIONS,
     LlmService,
@@ -495,6 +499,40 @@ async function executeToolCall(
         };
     }
 
+    if (call.name === "add_figure_to_summary") {
+        const caption = typeof args.caption === "string" ? args.caption.trim() : undefined;
+        const captured = await captureFigureCropFromPage(pageNumber, caption, {
+            docId: context.docId,
+            jumpToPage: context.jumpToPage,
+        });
+
+        if (!captured) {
+            return {
+                id: call.id,
+                name: call.name,
+                arguments: { pageNumber, caption },
+                status: "error",
+                badgeLabel: `⚠️ Could not capture figure on Page ${pageNumber}`,
+                result: `Failed to locate or render canvas for Page ${pageNumber}.`,
+            };
+        }
+
+        await insertFigureIntoSummary(captured.crop, context.docId);
+        const uri = captured.crop.imageUrl.startsWith("idb://")
+            ? captured.crop.imageUrl
+            : `idb://${captured.crop.id}`;
+        const label = captured.crop.caption || `Figure (Page ${pageNumber})`;
+
+        return {
+            id: call.id,
+            name: call.name,
+            arguments: { pageNumber, caption },
+            status: "success",
+            badgeLabel: `📎 Added figure from Page ${pageNumber} to Summary`,
+            result: `Inserted ![${label}](${uri}) into the active summary (${captured.created ? "newly captured from page canvas" : "reused existing crop"}).`,
+        };
+    }
+
     return {
         id: call.id,
         name: call.name,
@@ -641,7 +679,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         }));
         await DocumentDatabase.saveConversation(convWithUser);
 
-        // RAG Semantic Search + opening/rendered page fallback so broad questions ("what is this book about?") always have document grounding
         const aiConfig = useAiConfigStore.getState();
         const searchScope = useRagStore.getState().searchScope;
         let systemPrompt = "";
@@ -675,7 +712,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                         true,
                     );
                 } else if (activeDocId) {
-                    // Broad questions often fall below similarity threshold: fall back to opening indexed chunks
                     const docChunks = await RagService.getDocumentChunks(
                         activeDocId,
                     ).catch(() => []);
@@ -723,13 +759,12 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 systemPrompt = [
                     `You are Foliet's scholarly research assistant (Lio). The user has "${activeDocTitle}" open in the PDF viewer.`,
                     activeDoc?.isIndexed
-                        ? "You can call `navigate_to`, `highlight_passage`, or `explain_figure` to inspect and cite pages."
+                        ? "You can call `navigate_to`, `highlight_passage`, `explain_figure`, or `add_figure_to_summary` to inspect, cite, and capture pages."
                         : "Note: This PDF has not been indexed in RAG Search yet, and no page text is currently loaded. You may call `navigate_to(pageNumber: 1)` to jump to and read a page, or remind the user to click 'Index Document' in the RAG Search tab for full-book semantic search.",
                 ].join(" ");
             }
         }
 
-        // Create Assistant placeholder message
         const assistantId = crypto.randomUUID();
         const assistantPlaceholder: ChatMessage = {
             id: assistantId,
@@ -757,7 +792,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             ),
         }));
 
-        // Stream LLM Completion + multi-turn tool execution loop
         let accumulatedText = "";
         const allExecutedTools: ExecutedToolCall[] = [];
 
@@ -815,7 +849,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     break;
                 }
 
-                // Execute all returned tool calls
                 const roundExecuted: ExecutedToolCall[] = [];
                 for (const tc of pendingToolCalls) {
                     const execRes = await executeToolCall(tc, {
@@ -871,7 +904,6 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 ];
             }
 
-            // Completion successful
             const finalConv: ChatConversation = {
                 ...convWithAssistant,
                 updatedAt: Date.now(),

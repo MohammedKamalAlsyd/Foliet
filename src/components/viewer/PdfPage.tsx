@@ -1,10 +1,14 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Page } from "react-pdf";
-import { MessageSquare, Sparkles, X } from "lucide-react";
+import { ImagePlus, MessageSquare, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SelectionActionBar } from "@/components/viewer/SelectionActionBar";
+import { insertFigureIntoSummary } from "@/services/figureCropper";
+import { useDocumentStore } from "@/stores/documentStore";
 import { useRagStore } from "@/stores/ragStore";
+import { useSummaryStore } from "@/stores/summaryStore";
 import {
+  type CropAnnotation,
   type InkAnnotation,
   type NoteAnnotation,
   type PdfAnnotation,
@@ -38,7 +42,7 @@ interface PdfPageProps {
     y: number;
     width: number;
     height: number;
-  }) => void;
+  }) => Promise<CropAnnotation | void> | CropAnnotation | void;
   onDimensionsDiscovered: (page: number, width: number, height: number) => void;
 }
 
@@ -164,6 +168,9 @@ export const PdfPage = memo(function PdfPage({
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const ragSpotlightRef = useRef<HTMLDivElement | null>(null);
+  const quickInsertTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [discoveredDim, setDiscoveredDim] = useState<{
     width: number;
     height: number;
@@ -175,12 +182,20 @@ export const PdfPage = memo(function PdfPage({
     currX: number;
     currY: number;
   } | null>(null);
+  const [quickInsertCrop, setQuickInsertCrop] = useState<{
+    crop: CropAnnotation;
+    x: number;
+    y: number;
+  } | null>(null);
   const [selectionState, setSelectionState] = useState<{
     text: string;
     rect: DOMRect;
   } | null>(null);
 
   const activeRagHighlight = useRagStore((s) => s.activeRagHighlight);
+  const isSummaryWorkspaceOpen = useSummaryStore(
+    (s) => s.isSummaryWorkspaceOpen,
+  );
   const isRagHighlighted = Boolean(
     activeRagHighlight && activeRagHighlight.pageNumber === pageNumber,
   );
@@ -208,6 +223,14 @@ export const PdfPage = memo(function PdfPage({
       setSelectionState(null);
     }
   }, [activeTool, selectionState]);
+
+  useEffect(() => {
+    return () => {
+      if (quickInsertTimerRef.current) {
+        clearTimeout(quickInsertTimerRef.current);
+      }
+    };
+  }, []);
 
   // Dismiss action bar when selection is cleared in document
   useEffect(() => {
@@ -411,7 +434,7 @@ export const PdfPage = memo(function PdfPage({
     }
   };
 
-  const handleOverlayPointerUp = () => {
+  const handleOverlayPointerUp = async () => {
     if (inkDraft) {
       if (inkDraft.length >= 2) {
         onAddAnnotation({
@@ -451,7 +474,7 @@ export const PdfPage = memo(function PdfPage({
           const ctx = out.getContext("2d");
           if (ctx) {
             ctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
-            onAddFigureCrop({
+            const savedCrop = await onAddFigureCrop({
               pageNumber,
               imageUrl: out.toDataURL("image/png"),
               x,
@@ -459,6 +482,19 @@ export const PdfPage = memo(function PdfPage({
               width,
               height,
             });
+            if (savedCrop && isSummaryWorkspaceOpen) {
+              if (quickInsertTimerRef.current) {
+                clearTimeout(quickInsertTimerRef.current);
+              }
+              setQuickInsertCrop({
+                crop: savedCrop,
+                x: Math.min(0.85, x + width / 2),
+                y: Math.min(0.92, y + height),
+              });
+              quickInsertTimerRef.current = setTimeout(() => {
+                setQuickInsertCrop(null);
+              }, 6000);
+            }
           }
         }
       }
@@ -709,6 +745,42 @@ export const PdfPage = memo(function PdfPage({
             height: `${Math.abs(cropRect.currY - cropRect.startY) * 100}%`,
           }}
         />
+      )}
+
+      {/* 1-Click "Insert in Summary" action after area_select crop when split view is open */}
+      {quickInsertCrop && isSummaryWorkspaceOpen && (
+        <div
+          style={{
+            left: `${quickInsertCrop.x * 100}%`,
+            top: `${quickInsertCrop.y * 100}%`,
+          }}
+          className="absolute z-40 mt-1.5 -translate-x-1/2 flex items-center gap-1 rounded-full border border-border bg-card/95 px-2.5 py-1 text-xs shadow-lg backdrop-blur-md"
+        >
+          <button
+            type="button"
+            onClick={async (e) => {
+              e.stopPropagation();
+              const docId = useDocumentStore.getState().activeDoc?.id;
+              await insertFigureIntoSummary(quickInsertCrop.crop, docId);
+              setQuickInsertCrop(null);
+            }}
+            className="inline-flex items-center gap-1.5 font-medium text-[var(--accent-brand,#2563EB)] hover:opacity-85 cursor-pointer"
+          >
+            <ImagePlus size={13} strokeWidth={1.75} />
+            <span>Insert in Summary</span>
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setQuickInsertCrop(null);
+            }}
+            aria-label="Dismiss"
+            className="ml-0.5 rounded-full p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X size={11} />
+          </button>
+        </div>
       )}
 
       {/* Note pins */}

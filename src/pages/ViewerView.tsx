@@ -25,6 +25,7 @@ import { DocumentDatabase } from "@/services/storage/database";
 import { SettingsStorage } from "@/services/storage/settings";
 import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
 import { useAiStudioStore } from "@/stores/aiStudioStore";
+import { useSummaryStore } from "@/stores/summaryStore";
 import { useSystemStore } from "@/stores/systemStore";
 import {
   type BurnableAnnotation,
@@ -275,6 +276,26 @@ export function ViewerView() {
       .catch(() => {});
   }, []);
 
+  // Sync AI-captured crops (`add_figure_to_summary`) into Viewer state
+  useEffect(() => {
+    const onCropSaved = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{ docId?: string; crop?: CropAnnotation }>
+      ).detail;
+      if (!detail?.crop) return;
+      if (detail.docId && activeDoc?.id && detail.docId !== activeDoc.id) {
+        return;
+      }
+      setCropAnnotations((prev) =>
+        prev.some((c) => c.id === detail.crop!.id)
+          ? prev
+          : [detail.crop!, ...prev],
+      );
+    };
+    window.addEventListener("foliet:crop-saved", onCropSaved);
+    return () => window.removeEventListener("foliet:crop-saved", onCropSaved);
+  }, [activeDoc?.id]);
+
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => {
       const next = !prev;
@@ -364,6 +385,8 @@ export function ViewerView() {
     }
     programmaticScrollRef.current = false;
     setPdfProxy(null);
+    useSummaryStore.getState().setPdfProxy(null);
+    useSummaryStore.getState().setChapters([]);
     setOutline([]);
     setPageLabels([]);
     setPageDimensions({});
@@ -771,6 +794,9 @@ export function ViewerView() {
 
       const tag = document.activeElement?.tagName;
       if ((tag === "INPUT" || tag === "TEXTAREA") && !inSearch) return;
+      if ((document.activeElement as HTMLElement | null)?.isContentEditable) {
+        return;
+      }
 
       if (e.ctrlKey || e.metaKey) {
         const key = e.key.toLowerCase();
@@ -887,26 +913,25 @@ export function ViewerView() {
       y: number;
       width: number;
       height: number;
-    }) => {
-      if (!activeDoc?.id) return;
+    }): Promise<CropAnnotation | undefined> => {
+      if (!activeDoc?.id) return undefined;
       const id = `crop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       await DocumentDatabase.saveFigureCrop(id, crop.imageUrl, activeDoc.id);
-      setCropAnnotations((prev) => [
-        {
-          id,
-          pageNumber: crop.pageNumber,
-          toolType: "area_select",
-          color: "#06B6D4",
-          imageUrl: `idb://${id}`,
-          createdAt: new Date().toISOString(),
-          x: crop.x,
-          y: crop.y,
-          width: crop.width,
-          height: crop.height,
-        },
-        ...prev,
-      ]);
+      const created: CropAnnotation = {
+        id,
+        pageNumber: crop.pageNumber,
+        toolType: "area_select",
+        color: "#06B6D4",
+        imageUrl: `idb://${id}`,
+        createdAt: new Date().toISOString(),
+        x: crop.x,
+        y: crop.y,
+        width: crop.width,
+        height: crop.height,
+      };
+      setCropAnnotations((prev) => [created, ...prev]);
       toast.success("Figure captured");
+      return created;
     },
     [activeDoc?.id],
   );
@@ -944,6 +969,7 @@ export function ViewerView() {
     async (loaded: any) => {
       const count = loaded.numPages;
       setPdfProxy(loaded);
+      useSummaryStore.getState().setPdfProxy(loaded);
       setTotalPages(count);
       if (activeDoc?.id) setDocPageCount(activeDoc.id, count);
 
@@ -995,6 +1021,9 @@ export function ViewerView() {
         PdfService.extractPageLabels(loaded).catch(() => null),
       ]);
       setOutline(nextOutline);
+      useSummaryStore
+        .getState()
+        .setChapters(PdfService.buildChapters(nextOutline, count));
       if (nextLabels) setPageLabels(nextLabels);
     },
     [activeDoc?.id, setDocPageCount],
@@ -1035,7 +1064,7 @@ export function ViewerView() {
         onOpenSearch={search.openSearch}
       />
 
-      {/* Row 2+: Sidebar on left, Toolbar + PDF canvas on right */}
+      {/* Row 2+: Sidebar on left, Toolbar + PDF canvas on center, AI / Summary Split on right */}
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
         <PdfSidebar
           isOpen={sidebarOpen}
@@ -1173,7 +1202,7 @@ export function ViewerView() {
           </div>
         </div>
 
-        {/* Resizable Right AI Studio Sidebar */}
+        {/* Resizable Right AI Studio / Living Summary Split Pane */}
         <AiStudioSidebar
           isOpen={isAiStudioOpen}
           onJumpToPage={jumpToPage}

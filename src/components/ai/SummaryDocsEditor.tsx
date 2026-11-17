@@ -4,6 +4,7 @@
  * MIT Tiptap editor configured with StarterKit, CodeBlockLowlight,
  * @tiptap/markdown, a custom CropAwareImage NodeView that resolves
  * SQLite-backed `idb://crop-...` figure crop URIs transparently,
+ * drag-and-drop image/figure insertion at exact cursor coordinates,
  * and a living PageCitationDecorator that turns `[Page X]` / `(Page X)`
  * references into clickable jump-and-spotlight badges.
  */
@@ -339,6 +340,7 @@ const CropAwareImage = Image.extend({
 export interface SummaryDocsEditorHandle {
   insertImage: (attrs: { src: string; alt?: string }) => void;
   getMarkdown: () => string;
+  scrollToHeading: (title: string) => void;
 }
 
 interface SummaryDocsEditorProps {
@@ -395,6 +397,8 @@ export const SummaryDocsEditor = forwardRef<
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStreamingRef = useRef<boolean>(isStreaming);
   const onJumpToPageRef = useRef(onJumpToPage);
+  const [isDragOver, setIsDragOver] = useState(false);
+
   isStreamingRef.current = isStreaming;
   onJumpToPageRef.current = onJumpToPage;
 
@@ -422,6 +426,91 @@ export const SummaryDocsEditor = forwardRef<
     content: markdown || "",
     contentType: "markdown",
     editable: !isStreaming,
+    editorProps: {
+      handleDrop: (view, event, _slice, moved) => {
+        if (moved || isStreamingRef.current) return false;
+        setIsDragOver(false);
+
+        const coords = view.posAtCoords({
+          left: event.clientX,
+          top: event.clientY,
+        });
+        const dropPos = coords?.pos ?? view.state.selection.to;
+
+        // 1. Dropped Foliet figure crop from PdfSidebar
+        const cropPayload = event.dataTransfer?.getData(
+          "application/x-foliet-crop",
+        );
+        if (cropPayload) {
+          event.preventDefault();
+          try {
+            const parsed = JSON.parse(cropPayload) as {
+              src?: string;
+              alt?: string;
+            };
+            if (parsed?.src) {
+              const imgNode = view.state.schema.nodes.image?.create({
+                src: parsed.src,
+                alt: parsed.alt || "Captured PDF figure",
+              });
+              if (imgNode) {
+                const tr = view.state.tr.insert(dropPos, imgNode);
+                view.dispatch(tr);
+                view.focus();
+                return true;
+              }
+            }
+          } catch {
+            // Fall through
+          }
+        }
+
+        // 2. Dropped OS image file
+        const files = Array.from(event.dataTransfer?.files ?? []);
+        const imageFile = files.find((f) => f.type.startsWith("image/"));
+        if (imageFile) {
+          event.preventDefault();
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl =
+              typeof reader.result === "string" ? reader.result : null;
+            if (!dataUrl) return;
+            const imgNode = view.state.schema.nodes.image?.create({
+              src: dataUrl,
+              alt: imageFile.name || "Embedded image",
+            });
+            if (imgNode) {
+              const safePos = Math.min(dropPos, view.state.doc.content.size);
+              const tr = view.state.tr.insert(safePos, imgNode);
+              view.dispatch(tr);
+              view.focus();
+            }
+          };
+          reader.readAsDataURL(imageFile);
+          return true;
+        }
+
+        return false;
+      },
+      handleDOMEvents: {
+        dragover: (_view, event) => {
+          const types = Array.from(event.dataTransfer?.types ?? []);
+          if (
+            types.includes("application/x-foliet-crop") ||
+            types.includes("Files")
+          ) {
+            event.preventDefault();
+            setIsDragOver(true);
+            return true;
+          }
+          return false;
+        },
+        dragleave: () => {
+          setIsDragOver(false);
+          return false;
+        },
+      },
+    },
     onUpdate: ({ editor: activeEditor }) => {
       if (isStreamingRef.current) return;
       const nextMd = activeEditor.getMarkdown();
@@ -442,6 +531,17 @@ export const SummaryDocsEditor = forwardRef<
           .run();
       },
       getMarkdown: () => editor?.getMarkdown() ?? lastSyncedMarkdownRef.current,
+      scrollToHeading: (title: string) => {
+        if (!editor) return;
+        const normalized = title.toLowerCase().trim();
+        const headings = Array.from(
+          editor.view.dom.querySelectorAll("h1, h2, h3"),
+        ) as HTMLElement[];
+        const target = headings.find(
+          (h) => (h.textContent || "").toLowerCase().trim() === normalized,
+        );
+        target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      },
     }),
     [editor],
   );
@@ -616,13 +716,18 @@ export const SummaryDocsEditor = forwardRef<
       </div>
 
       {/* Document Surface */}
-      <div className="flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+      <div
+        className={cn(
+          "flex-1 overflow-y-auto px-5 py-5 sm:px-7 transition-colors",
+          isDragOver &&
+            "bg-[var(--accent-brand,#2563EB)]/5 ring-2 ring-inset ring-[var(--accent-brand,#2563EB)]/40",
+        )}
+      >
         <div className="foliet-docs-editor mx-auto max-w-[720px] min-h-full">
           {!markdown && !isStreaming ? (
             <div className="mb-4 rounded-xl border border-border bg-card p-4 text-xs text-muted-foreground">
-              Select highlights, sticky notes, figure crops, or chat takeaways
-              on the left, then choose Generate to synthesize your document. You
-              can also start typing directly here.
+              Select a chapter (or Full Book) and click Generate below, drag
+              figures from the left Figures tab, or start typing directly.
             </div>
           ) : null}
           <EditorContent editor={editor} />

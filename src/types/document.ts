@@ -17,6 +17,14 @@ export interface PdfOutlineNode {
     dest?: unknown;
 }
 
+export interface PdfChapter {
+    id: string;
+    title: string;
+    startPage: number;
+    endPage: number;
+    level: number;
+}
+
 export interface BookmarkItem {
     id: string;
     pageNumber: number;

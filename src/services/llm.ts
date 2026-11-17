@@ -95,6 +95,36 @@ export interface StructuredSummaryInput {
     fallbackExcerpt?: string;
 }
 
+export interface ChapterSummaryInput {
+    docTitle: string;
+    chapterTitle: string;
+    startPage: number;
+    endPage: number;
+    focusMode: SummaryFocusMode;
+    chapterText: string;
+    highlights: SummaryHighlightInput[];
+    notes: SummaryNoteInput[];
+    crops: SummaryCropInput[];
+    chatTakeaways: SummaryChatTakeawayInput[];
+}
+
+export interface ModifySummaryInput {
+    docTitle: string;
+    focusMode: SummaryFocusMode;
+    existingMarkdown: string;
+    instruction: string;
+    chapterContext?: {
+        title: string;
+        startPage: number;
+        endPage: number;
+        text: string;
+    };
+    highlights: SummaryHighlightInput[];
+    notes: SummaryNoteInput[];
+    crops: SummaryCropInput[];
+    chatTakeaways: SummaryChatTakeawayInput[];
+}
+
 export const FOLIET_TOOL_DEFINITIONS: LlmToolDefinition[] = [
     {
         name: "navigate_to",
@@ -158,6 +188,26 @@ export const FOLIET_TOOL_DEFINITIONS: LlmToolDefinition[] = [
                 caption: {
                     type: "string",
                     description: "Figure number or caption text to focus on.",
+                },
+            },
+            required: ["pageNumber"],
+        },
+    },
+    {
+        name: "add_figure_to_summary",
+        description:
+            "Capture a figure, chart, or diagram from a specific PDF page (reusing an existing crop if present, or auto-cropping around its caption) and insert it into the active living summary.",
+        parameters: {
+            type: "object",
+            properties: {
+                pageNumber: {
+                    type: "integer",
+                    description: "1-indexed PDF page number containing the figure.",
+                },
+                caption: {
+                    type: "string",
+                    description:
+                        "Figure label or caption text on the page (e.g. 'Figure 2' or 'System architecture').",
                 },
             },
             required: ["pageNumber"],
@@ -1070,7 +1120,7 @@ export class LlmService {
 
         const toolNote = toolsEnabled
             ? [
-                "5. COPILOT TOOLS: You have tools to interact with the PDF viewer (`navigate_to`, `highlight_passage`, `explain_figure`). Calling `navigate_to` or `explain_figure` also returns that page's text so you can read it. Never print raw tool logs or JSON tool syntax in your final response.",
+                "5. COPILOT TOOLS: You have tools to interact with the PDF viewer (`navigate_to`, `highlight_passage`, `explain_figure`, `add_figure_to_summary`). Calling `navigate_to` or `explain_figure` also returns that page's text so you can read it, and `add_figure_to_summary` captures a page figure and inserts it into the living summary. Never print raw tool logs or JSON tool syntax in your final response.",
             ]
             : [];
 
@@ -1111,6 +1161,158 @@ export class LlmService {
             "- Use clear bullet points and bold headers.",
             contentSnippet ? `\nDOCUMENT EXCERPT / TEXT:\n${contentSnippet}` : "",
         ].join("\n");
+    }
+
+    /**
+     * System-prompt preset shaping tone, formatting, and citation discipline for Living Summary synthesis & edits.
+     */
+    public static buildSummarySystemPrompt(
+        focusMode: SummaryFocusMode,
+        docTitle: string,
+    ): string {
+        const modeGuidance: Record<SummaryFocusMode, string> = {
+            study: [
+                "STYLE MODE: Study Notes",
+                "- Pedagogical, clear, and structured for deep retention and review.",
+                "- Define core concepts, highlight intuition alongside key facts, and end chapters with concise takeaway bullets.",
+                "- Incorporate the user's personal notes and Lio Q&A clarifications where provided.",
+            ].join("\n"),
+            executive: [
+                "STYLE MODE: Executive Brief",
+                "- Crisp, high-signal, and decision-oriented.",
+                "- Lead with thesis, key conclusions, empirical metrics, and practical implications or limitations.",
+                "- Keep prose tight; avoid verbose step-by-step repetition.",
+            ].join("\n"),
+            technical: [
+                "STYLE MODE: Technical & Code",
+                "- Rigorous focus on system architecture, formal definitions, equations, algorithms, benchmarks, and trade-offs.",
+                "- Present algorithms, mathematical formulations, protocols, or pseudocode inside fenced code blocks with explicit language tags (e.g., ```python, ```rust, ```latex).",
+            ].join("\n"),
+        };
+
+        return [
+            `You are Foliet's scholarly synthesis assistant maintaining a Living Summary for "${docTitle}".`,
+            "",
+            modeGuidance[focusMode],
+            "",
+            "GLOBAL OUTPUT RULES:",
+            "- GROUNDING & CITATIONS: Anchor claims directly in the supplied source text and user annotations. Cite pages inline using bracketed format `[Page X]`.",
+            "- FIGURES: When figure crop URIs (`idb://crop-...`) are provided, embed relevant figures on their own line using `![Concise figure description (Page X)](idb://crop-...)`. Never invent or alter image URIs.",
+            "- TOOL USAGE: If the user asks to include a figure from a page that does not yet have a crop URI, you may call `add_figure_to_summary`.",
+            "- OUTPUT FORMAT: Return clean, valid Markdown only—no conversational preamble or meta-commentary.",
+        ].join("\n");
+    }
+
+    /**
+     * Builds the user prompt for generating a single chapter section (`## Chapter Title`).
+     */
+    public static buildChapterSummaryPrompt(input: ChapterSummaryInput): string {
+        const notesSection = this.formatSummaryContextBlocks(input);
+
+        return [
+            `Synthesize a structured Markdown summary section for the following chapter of "${input.docTitle}".`,
+            `CHAPTER: "${input.chapterTitle}" (Pages ${input.startPage}–${input.endPage})`,
+            "",
+            `Start the output directly with the exact heading:`,
+            `## ${input.chapterTitle}`,
+            "",
+            "Use `###` subheadings where helpful, bullet points for key mechanisms/results, and `[Page X]` citations throughout.",
+            "",
+            "CHAPTER TEXT / EXCERPTS:",
+            input.chapterText.trim() || "(No extractable text found in this page range.)",
+            notesSection,
+        ].join("\n");
+    }
+
+    /**
+     * Builds the user prompt for conversational modification of the existing living summary.
+     */
+    public static buildModifySummaryPrompt(input: ModifySummaryInput): string {
+        const notesSection = this.formatSummaryContextBlocks(input);
+        const chapterBlock = input.chapterContext
+            ? [
+                `ACTIVE CHAPTER CONTEXT: "${input.chapterContext.title}" (Pages ${input.chapterContext.startPage}–${input.chapterContext.endPage})`,
+                input.chapterContext.text.trim(),
+            ].join("\n")
+            : "";
+
+        return [
+            "Modify or refine the EXISTING SUMMARY MARKDOWN below according to the USER INSTRUCTION.",
+            "Preserve unaffected sections, headings, `[Page X]` citations, and existing `![...](idb://...)` image links unless the instruction explicitly asks to remove or rewrite them.",
+            "Return the complete updated Markdown document only.",
+            "",
+            `USER INSTRUCTION: ${input.instruction.trim()}`,
+            "",
+            "EXISTING SUMMARY MARKDOWN:",
+            input.existingMarkdown.trim() || "(Empty document)",
+            chapterBlock ? `\n${chapterBlock}` : "",
+            notesSection,
+        ]
+            .filter(Boolean)
+            .join("\n");
+    }
+
+    private static formatSummaryContextBlocks(input: {
+        highlights: SummaryHighlightInput[];
+        notes: SummaryNoteInput[];
+        crops: SummaryCropInput[];
+        chatTakeaways: SummaryChatTakeawayInput[];
+    }): string {
+        const blocks: string[] = [];
+
+        if (input.highlights.length > 0) {
+            blocks.push(
+                [
+                    "USER HIGHLIGHTS & UNDERLINES:",
+                    ...input.highlights.map(
+                        (h, i) => `${i + 1}. [Page ${h.pageNumber} · ${h.toolType}] "${h.text.trim()}"`,
+                    ),
+                ].join("\n"),
+            );
+        }
+
+        if (input.notes.length > 0) {
+            blocks.push(
+                [
+                    "USER STICKY NOTES:",
+                    ...input.notes.map((n, i) => {
+                        const ctx = n.contextSnippet
+                            ? ` (Context: "${n.contextSnippet.trim()}")`
+                            : "";
+                        return `${i + 1}. [Page ${n.pageNumber}] ${n.comment.trim()}${ctx}`;
+                    }),
+                ].join("\n"),
+            );
+        }
+
+        if (input.crops.length > 0) {
+            blocks.push(
+                [
+                    "AVAILABLE FIGURE CROPS IN RANGE:",
+                    ...input.crops.map(
+                        (c, i) =>
+                            `${i + 1}. [Page ${c.pageNumber}] URI: ${c.imageUrl}${c.caption ? ` | Caption: "${c.caption.trim()}"` : ""
+                            }${c.resolvedDataUrl ? " | (Visual image attached)" : ""}`,
+                    ),
+                ].join("\n"),
+            );
+        }
+
+        if (input.chatTakeaways.length > 0) {
+            blocks.push(
+                [
+                    "SAVED LIO CHAT TAKEAWAYS:",
+                    ...input.chatTakeaways.map(
+                        (c, i) =>
+                            `Conversation ${i + 1}: "${c.title}"\n${c.excerpts
+                                .map((e) => `  - ${e.trim()}`)
+                                .join("\n")}`,
+                    ),
+                ].join("\n"),
+            );
+        }
+
+        return blocks.length > 0 ? `\n\n${blocks.join("\n\n")}` : "";
     }
 
     /**

@@ -13,6 +13,9 @@
     "dialog:allow-open",
     "sql:default",
     "sql:allow-execute",
+    "fs:allow-write-file",
+    "dialog:allow-save",
+    "dialog:default",
     "store:default"
   ]
 }
