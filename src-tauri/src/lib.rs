@@ -1,6 +1,7 @@
 mod pdf_exporter;
 mod pdf_models;
 mod pdf_reader;
+mod rag;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use pdf_models::AnnotationDto;
+use tauri::Manager;
 use tauri::http::{Response, StatusCode, header};
 
 enum CachedPdfData {
@@ -308,6 +310,15 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .setup(|app| {
+            let app_data_dir = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+            let rag_state = rag::RagState::init(app_data_dir)?;
+            app.manage(rag_state);
+            Ok(())
+        })
         .register_asynchronous_uri_scheme_protocol("foliet-pdf", |_ctx, request, responder| {
             let method = request.method().to_string();
             let uri_path = request.uri().path().to_string();
@@ -326,6 +337,15 @@ pub fn run() {
             export_pdf,
             pdf_reader::open_pdf_document,
             pdf_reader::extract_pdf_annotations,
+            rag::commands::rag_get_model_status,
+            rag::commands::rag_download_model,
+            rag::commands::rag_delete_model,
+            rag::commands::rag_list_downloaded_models,
+            rag::commands::rag_index_document,
+            rag::commands::rag_remove_document_index,
+            rag::commands::rag_get_catalog,
+            rag::commands::rag_get_document_chunks,
+            rag::commands::rag_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Foliet application");

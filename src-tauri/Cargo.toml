@@ -30,8 +30,22 @@ lopdf = "0.47.0"
 sha2 = "0.11.1"
 tauri-plugin-sql = { version = "2.6.0", features = ["sqlite"] }
 
+# RAG: SQLite vector store, ONNX Runtime, Tokenizer, HTTP client, Async
+rusqlite = { version = "0.31", features = ["bundled"] }
+ort = { version = "2.0.0-rc.15", features = ["ndarray"] }
+ndarray = "0.17"
+tokenizers = { version = "0.23", default-features = false, features = [
+    "fancy-regex",
+] }
+reqwest = { version = "0.13", default-features = false, features = [
+    "json",
+    "stream",
+    "default-tls",
+] }
+tokio = { version = "1", features = ["sync", "time", "fs"] }
+futures-util = "0.3"
+chrono = { version = "0.4", features = ["clock"] }
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true

@@ -6,23 +6,22 @@ import type {
 import type { LlmProvider, LlmModelPreset } from "@/types/chat";
 import { AiSettings } from "@/services/storage/settings";
 
-
 export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]> = {
     "local-rust": [
         {
-            id: "thenlper/gte-small",
-            label: "GTE Small",
+            id: "Xenova/gte-small",
+            label: "GTE Small (ONNX)",
             dimensions: 384,
             provider: "local-rust",
-            description: "Fast, accurate local embedding model (67MB). Recommended default.",
+            description: "Fast, accurate quantized ONNX local embedding model. Recommended default.",
             isDefault: true,
         },
         {
             id: "Xenova/bge-small-en-v1.5",
-            label: "BGE Small EN v1.5",
+            label: "BGE Small EN v1.5 (ONNX)",
             dimensions: 384,
             provider: "local-rust",
-            description: "High performance compact retrieval model.",
+            description: "High-performance compact ONNX retrieval model with query instruction prefix.",
         },
     ],
 
@@ -110,8 +109,6 @@ export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]
         },
     ],
 };
-
-
 
 export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
     openrouter: [
@@ -247,16 +244,14 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
     ],
 };
 
-
 export const DEFAULT_RAG_HYPERPARAMETERS: RagHyperparameters = {
     chunkSizeLines: 32,
     overlapLines: 6,
     similarityThreshold: 0.65,
     topK: 5,
     maxTokens: 1024,
-    vectorDimension: 384, // Matches GTE Small default
+    vectorDimension: 384, // Matches Xenova/gte-small default
 };
-
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
     llmProvider: "openrouter",
@@ -264,7 +259,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
     apiKeys: {},
     ollamaEndpoint: "http://localhost:11434",
     embeddingProvider: "local-rust",
-    embeddingModel: "thenlper/gte-small",
+    embeddingModel: "Xenova/gte-small",
     embeddingApiKey: "",
     hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
 };

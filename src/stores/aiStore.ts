@@ -2,12 +2,13 @@
  * Foliet - Zustand AI Store
  *
  * Implements global AI state combining conversational LLM streaming,
- * SQLite persistence, dense vector indexing, chunk inspection,
- * and RAG semantic retrieval.
+ * SQLite persistence, dense vector indexing via Rust (`rag.db`), chunk inspection,
+ * local ONNX model lifecycle, and RAG semantic retrieval.
  */
 
 import { create } from "zustand";
 import { SettingsStorage } from "@/services/storage/settings";
+import { DocumentCatalogStorage } from "@/services/storage/catalog";
 import { DocumentDatabase } from "@/services/storage/database";
 import {
     LlmService,
@@ -31,6 +32,9 @@ import type {
 } from "@/types/chat";
 import type {
     EmbeddingProvider,
+    EmbeddingConfig,
+    DownloadedModelInfo,
+    RagIndexProgress,
     RagSearchResult,
     RagHyperparameters,
 } from "@/types/embedding";
@@ -39,6 +43,16 @@ export interface AiSummaryState {
     content: string;
     sourceSnapshot?: string;
     updatedAt: number;
+}
+
+function extractErrorMessage(err: unknown, fallback: string): string {
+    if (typeof err === "string" && err.trim()) return err;
+    if (err instanceof Error && err.message.trim()) return err.message;
+    if (typeof err === "object" && err !== null && "message" in err) {
+        const msg = String((err as { message?: unknown }).message ?? "").trim();
+        if (msg) return msg;
+    }
+    return fallback;
 }
 
 export interface AiStore extends AiConfigState {
@@ -55,6 +69,11 @@ export interface AiStore extends AiConfigState {
     isSummaryWorkspaceOpen: boolean;
     summaryFocusMode: SummaryFocusMode;
 
+    // Detailed Indexing & Local Model Lifecycle State
+    indexingProgressDetail: RagIndexProgress | null;
+    downloadedModels: DownloadedModelInfo[];
+    isDeletingModel: boolean;
+
     // Actions - Init & Settings
     initializeAiStore: () => Promise<void>;
     setLlmProvider: (provider: LlmProvider) => Promise<void>;
@@ -66,6 +85,7 @@ export interface AiStore extends AiConfigState {
     setEmbeddingApiKey: (key: string) => Promise<void>;
     setHyperparameters: (patch: Partial<RagHyperparameters>) => Promise<void>;
     resetToDefaults: () => Promise<void>;
+    getActiveEmbeddingConfig: () => EmbeddingConfig;
 
     // Actions - Conversations
     loadConversations: (docId?: string) => Promise<void>;
@@ -111,9 +131,11 @@ export interface AiStore extends AiConfigState {
     searchRag: (query?: string, docId?: string) => Promise<void>;
     setActiveRagHighlight: (result: RagSearchResult | null) => void;
 
-    // Actions - Model Download
+    // Actions - Model Download & Deletion
     checkLocalModelStatus: () => Promise<void>;
+    loadDownloadedModels: () => Promise<void>;
     downloadLocalModel: (modelId?: string) => Promise<void>;
+    deleteLocalModel: (modelId?: string) => Promise<void>;
 
     // AI Studio UI State & Selection
     isAiStudioOpen: boolean;
@@ -137,7 +159,6 @@ const DEFAULT_API_KEYS: Record<LlmProvider, string> = {
     anthropic: "",
 };
 
-// Module-scoped abort controllers for currently active streams
 let activeAbortController: AbortController | null = null;
 let activeSummaryAbortController: AbortController | null = null;
 
@@ -157,11 +178,14 @@ export const useAiStore = create<AiStore>((set, get) => ({
     localModelStatus: null,
     downloadProgress: null,
     isDownloadingModel: false,
+    downloadedModels: [],
+    isDeletingModel: false,
 
     // Indexing & Catalog
     isIndexing: false,
     indexingDocId: null,
     indexingProgress: 0,
+    indexingProgressDetail: null,
     indexingError: null,
     catalog: { documents: [] },
 
@@ -197,6 +221,16 @@ export const useAiStore = create<AiStore>((set, get) => ({
     isAiStudioOpen: false,
     activeAiTab: "chat",
 
+    getActiveEmbeddingConfig: () => {
+        const s = get();
+        return {
+            provider: s.embeddingProvider,
+            model: s.embeddingModel,
+            apiKey: s.embeddingApiKey || undefined,
+            endpoint: s.embeddingProvider === "ollama" ? s.ollamaEndpoint : undefined,
+        };
+    },
+
     // =========================================================================
     // Initialization & Settings
     // =========================================================================
@@ -223,11 +257,12 @@ export const useAiStore = create<AiStore>((set, get) => ({
                 hyperparameters: { ...saved.hyperparameters },
             });
 
-            // Load catalog and check local embedding model status
-            const catalog = await RagService.getRagCatalog();
+            const [catalog] = await Promise.all([
+                RagService.getRagCatalog(),
+                get().checkLocalModelStatus(),
+                get().loadDownloadedModels(),
+            ]);
             set({ catalog });
-
-            await get().checkLocalModelStatus();
         } catch (err) {
             console.warn("AiStore: Failed to initialize settings:", err);
         }
@@ -264,22 +299,40 @@ export const useAiStore = create<AiStore>((set, get) => ({
 
     setEmbeddingProvider: async (provider) => {
         const presets = EMBEDDING_PRESETS[provider];
-        const defaultModel =
-            presets?.find((p) => p.isDefault)?.id ?? presets?.[0]?.id ?? get().embeddingModel;
+        const preset = presets?.find((p) => p.isDefault) ?? presets?.[0];
+        const defaultModel = preset?.id ?? get().embeddingModel;
+        const nextHyper = preset
+            ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
+            : get().hyperparameters;
+
         set({
             embeddingProvider: provider,
             embeddingModel: defaultModel,
+            hyperparameters: nextHyper,
         });
         await SettingsStorage.saveAiSettings({
             embeddingProvider: provider,
             embeddingModel: defaultModel,
+            hyperparameters: nextHyper,
         });
         await get().checkLocalModelStatus();
     },
 
     setEmbeddingModel: async (model) => {
-        set({ embeddingModel: model });
-        await SettingsStorage.saveAiSettings({ embeddingModel: model });
+        const provider = get().embeddingProvider;
+        const preset = EMBEDDING_PRESETS[provider]?.find((p) => p.id === model);
+        const nextHyper = preset
+            ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
+            : get().hyperparameters;
+
+        set({
+            embeddingModel: model,
+            hyperparameters: nextHyper,
+        });
+        await SettingsStorage.saveAiSettings({
+            embeddingModel: model,
+            hyperparameters: nextHyper,
+        });
         await get().checkLocalModelStatus();
     },
 
@@ -394,13 +447,11 @@ export const useAiStore = create<AiStore>((set, get) => ({
         const text = content.trim();
         if (!text) return;
 
-        // Cancel any pending active stream
         if (get().isStreaming) {
             get().cancelStreaming();
         }
 
-        // 1. Resolve or create active conversation
-        let state = get();
+        const state = get();
         let conv = state.conversations.find((c) => c.id === state.activeConversationId);
         if (!conv) {
             const initialTitle = text.length > 36 ? `${text.slice(0, 36)}...` : text;
@@ -409,7 +460,6 @@ export const useAiStore = create<AiStore>((set, get) => ({
 
         const convId = conv.id;
 
-        // 2. Build User message & clear pending snippet
         const pendingSnippet = get().pendingContextSnippet;
         const userMsg: ChatMessage = {
             id: crypto.randomUUID(),
@@ -432,7 +482,7 @@ export const useAiStore = create<AiStore>((set, get) => ({
         }));
         await DocumentDatabase.saveConversation(convWithUser);
 
-        // 3. RAG Semantic Search (if enabled)
+        // RAG Semantic Search (passes active embeddingConfig into Rust)
         let systemPrompt = "";
         let citations: CitationReference[] = [];
         const shouldSearchRag = options?.useRag ?? true;
@@ -441,12 +491,15 @@ export const useAiStore = create<AiStore>((set, get) => ({
 
         if (shouldSearchRag) {
             try {
-                const ragResults = await RagService.searchRag({
-                    query: text,
-                    targetDocId,
-                    topK: get().hyperparameters.topK,
-                    similarityThreshold: get().hyperparameters.similarityThreshold,
-                });
+                const ragResults = await RagService.searchRag(
+                    {
+                        query: text,
+                        targetDocId,
+                        topK: get().hyperparameters.topK,
+                        similarityThreshold: get().hyperparameters.similarityThreshold,
+                    },
+                    get().getActiveEmbeddingConfig()
+                );
 
                 if (ragResults.length > 0) {
                     citations = ragResults.map((r) => ({
@@ -773,7 +826,17 @@ export const useAiStore = create<AiStore>((set, get) => ({
             isIndexing: true,
             indexingDocId: docId,
             indexingProgress: 0,
+            indexingProgressDetail: null,
             indexingError: null,
+        });
+
+        const unlisten = await RagService.onIndexProgress((prog) => {
+            if (prog.docId === docId) {
+                set({
+                    indexingProgress: prog.percent,
+                    indexingProgressDetail: prog,
+                });
+            }
         });
 
         try {
@@ -784,7 +847,8 @@ export const useAiStore = create<AiStore>((set, get) => ({
                     filePath,
                     selectedPageRanges: pageRanges,
                 },
-                get().hyperparameters
+                get().hyperparameters,
+                get().getActiveEmbeddingConfig()
             );
 
             const catalog = await RagService.getRagCatalog();
@@ -793,17 +857,22 @@ export const useAiStore = create<AiStore>((set, get) => ({
                 isIndexing: false,
                 indexingDocId: null,
                 indexingProgress: 100,
+                indexingProgressDetail: null,
             });
 
-            // Sync with document store
+            await DocumentCatalogStorage.updateDocument(docId, { isIndexed: true }).catch(() => { });
             useDocumentStore.getState().setDocumentIndexed(true);
-        } catch (err: any) {
-            console.error("AiStore: Indexing failed:", err);
+        } catch (err) {
+            const message = extractErrorMessage(err, "Indexing failed.");
+            console.error("AiStore: Indexing failed:", message);
             set({
                 isIndexing: false,
                 indexingDocId: null,
-                indexingError: err?.message || "Indexing failed.",
+                indexingProgressDetail: null,
+                indexingError: message,
             });
+        } finally {
+            unlisten();
         }
     },
 
@@ -811,8 +880,11 @@ export const useAiStore = create<AiStore>((set, get) => ({
         try {
             await RagService.removeDocumentIndex(docId);
             const catalog = await RagService.getRagCatalog();
-            set({ catalog });
-            useDocumentStore.getState().setDocumentIndexed(false);
+            set({ catalog, inspectedChunks: [], indexingError: null });
+            await DocumentCatalogStorage.updateDocument(docId, { isIndexed: false }).catch(() => { });
+            if (useDocumentStore.getState().activeDoc?.id === docId) {
+                useDocumentStore.getState().setDocumentIndexed(false);
+            }
         } catch (err) {
             console.error("AiStore: Remove index failed:", err);
         }
@@ -856,18 +928,22 @@ export const useAiStore = create<AiStore>((set, get) => ({
             return;
         }
 
-        set({ isSearchingRag: true });
+        set({ isSearchingRag: true, indexingError: null });
         try {
-            const results = await RagService.searchRag({
-                query: q,
-                targetDocId: get().searchScope === "current" ? docId : undefined,
-                topK: get().hyperparameters.topK,
-                similarityThreshold: get().hyperparameters.similarityThreshold,
-            });
+            const results = await RagService.searchRag(
+                {
+                    query: q,
+                    targetDocId: get().searchScope === "current" ? docId : undefined,
+                    topK: get().hyperparameters.topK,
+                    similarityThreshold: get().hyperparameters.similarityThreshold,
+                },
+                get().getActiveEmbeddingConfig()
+            );
             set({ ragResults: results, isSearchingRag: false });
         } catch (err) {
-            console.error("AiStore: RAG search failed:", err);
-            set({ ragResults: [], isSearchingRag: false });
+            const message = extractErrorMessage(err, "RAG search failed.");
+            console.error("AiStore: RAG search failed:", message);
+            set({ ragResults: [], isSearchingRag: false, indexingError: message });
         }
     },
 
@@ -876,7 +952,7 @@ export const useAiStore = create<AiStore>((set, get) => ({
     },
 
     // =========================================================================
-    // Local Model Lifecycle
+    // Local Model Lifecycle (Download & Deletion)
     // =========================================================================
 
     checkLocalModelStatus: async () => {
@@ -891,10 +967,20 @@ export const useAiStore = create<AiStore>((set, get) => ({
         }
     },
 
+    loadDownloadedModels: async () => {
+        try {
+            const models = await RagService.listDownloadedModels();
+            set({ downloadedModels: models });
+        } catch (err) {
+            console.warn("AiStore: Failed to list downloaded models:", err);
+        }
+    },
+
     downloadLocalModel: async (modelId) => {
         const targetModel = modelId ?? get().embeddingModel;
         set({
             isDownloadingModel: true,
+            indexingError: null,
             downloadProgress: {
                 modelId: targetModel,
                 percent: 0,
@@ -905,18 +991,23 @@ export const useAiStore = create<AiStore>((set, get) => ({
         });
 
         const unlisten = await RagService.onModelDownloadProgress((prog) => {
+            if (prog.modelId !== targetModel) return;
             set({ downloadProgress: prog });
             if (prog.isComplete) {
                 set({ isDownloadingModel: false });
-                get().checkLocalModelStatus();
             }
         });
 
         try {
             await RagService.downloadModel(targetModel);
-            await get().checkLocalModelStatus();
-        } catch (err: any) {
-            console.error("AiStore: Model download failed:", err);
+            await Promise.all([
+                get().checkLocalModelStatus(),
+                get().loadDownloadedModels(),
+            ]);
+            set({ isDownloadingModel: false });
+        } catch (err) {
+            const message = extractErrorMessage(err, "Model download failed");
+            console.error("AiStore: Model download failed:", message);
             set({
                 isDownloadingModel: false,
                 downloadProgress: {
@@ -925,11 +1016,29 @@ export const useAiStore = create<AiStore>((set, get) => ({
                     downloadedBytes: 0,
                     totalBytes: 0,
                     isComplete: false,
-                    error: err?.message || "Model download failed",
+                    error: message,
                 },
             });
         } finally {
             unlisten();
+        }
+    },
+
+    deleteLocalModel: async (modelId) => {
+        const targetModel = modelId ?? get().embeddingModel;
+        set({ isDeletingModel: true });
+        try {
+            await RagService.deleteModel(targetModel);
+            await Promise.all([
+                get().checkLocalModelStatus(),
+                get().loadDownloadedModels(),
+            ]);
+        } catch (err) {
+            const message = extractErrorMessage(err, "Failed to delete model.");
+            console.error("AiStore: Failed to delete local model:", message);
+            set({ indexingError: message });
+        } finally {
+            set({ isDeletingModel: false });
         }
     },
 

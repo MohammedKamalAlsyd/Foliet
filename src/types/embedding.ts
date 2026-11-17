@@ -8,6 +8,13 @@ export type EmbeddingProvider =
     | "openai"
     | "ollama";
 
+export interface EmbeddingConfig {
+    provider: EmbeddingProvider;
+    model: string;
+    apiKey?: string;
+    endpoint?: string;
+}
+
 export interface EmbeddingModelPreset {
     id: string;
     label: string;
@@ -48,6 +55,16 @@ export interface RagHyperparameters {
     vectorDimension: number;
 }
 
+export interface RagIndexProgress {
+    docId: string;
+    stage: "extracting" | "chunking" | "embedding" | "saving";
+    currentPage: number;
+    totalPages: number;
+    processedChunks: number;
+    totalChunks: number;
+    percent: number;
+}
+
 export interface ModelDownloadProgress {
     modelId: string;
     percent: number;
@@ -63,6 +80,12 @@ export interface ModelStatus {
     isDownloading: boolean;
     fileSizeMb: number;
     provider: EmbeddingProvider;
+}
+
+export interface DownloadedModelInfo {
+    modelId: string;
+    fileSizeMb: number;
+    dirName: string;
 }
 
 export interface IndexingScope {
