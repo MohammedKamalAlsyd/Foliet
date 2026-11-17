@@ -110,3 +110,43 @@ export interface RagSearchResult {
     text: string;
     similarityScore: number;
 }
+
+/**
+ * Transient RAG runtime & UI state interfaces.
+ */
+export interface RagModelLifecycleState {
+    localModelStatus: ModelStatus | null;
+    downloadProgress: ModelDownloadProgress | null;
+    isDownloadingModel: boolean;
+    downloadedModels: DownloadedModelInfo[];
+    isDeletingModel: boolean;
+}
+
+export interface RagIndexingState {
+    isIndexing: boolean;
+    indexingDocId: string | null;
+    indexingProgress: number;
+    indexingProgressDetail: RagIndexProgress | null;
+    indexingError: string | null;
+    catalog: RagCatalog;
+}
+
+export interface RagChunkInspectionState {
+    isInspectChunksMode: boolean;
+    inspectedChunks: DocumentChunk[];
+    isLoadingChunks: boolean;
+}
+
+export interface RagSearchState {
+    ragQuery: string;
+    ragResults: RagSearchResult[];
+    isSearchingRag: boolean;
+    searchScope: "current" | "all";
+    activeRagHighlight: RagSearchResult | null;
+}
+
+export interface RagState
+    extends RagModelLifecycleState,
+    RagIndexingState,
+    RagChunkInspectionState,
+    RagSearchState { }

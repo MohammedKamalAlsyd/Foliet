@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   CheckCircle2,
   Database,
@@ -19,8 +20,10 @@ import { RagSearchPanel } from "@/components/ai/RagSearchPanel";
 import { SummarizationWorkspace } from "@/components/ai/SummarizationWorkspace";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useAiStore } from "@/stores/aiStore";
+import { useAiStudioStore } from "@/stores/aiStudioStore";
+import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
+import { useSummaryStore } from "@/stores/summaryStore";
 import {
   isCropAnnotation,
   isNoteAnnotation,
@@ -60,15 +63,27 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
   const [isResizing, setIsResizing] = useState(false);
 
   const activeDoc = useDocumentStore((s) => s.activeDoc);
-  const {
-    activeAiTab,
-    setActiveAiTab,
-    setAiStudioOpen,
-    activeSummary,
-    loadSummary,
-    conversations,
-    setSummaryWorkspaceOpen,
-  } = useAiStore();
+  const { activeAiTab, setActiveAiTab, setAiStudioOpen } = useAiStudioStore(
+    useShallow((s) => ({
+      activeAiTab: s.activeAiTab,
+      setActiveAiTab: s.setActiveAiTab,
+      setAiStudioOpen: s.setAiStudioOpen,
+    })),
+  );
+  const { activeSummary, loadSummary, setSummaryWorkspaceOpen } =
+    useSummaryStore(
+      useShallow((s) => ({
+        activeSummary: s.activeSummary,
+        loadSummary: s.loadSummary,
+        setSummaryWorkspaceOpen: s.setSummaryWorkspaceOpen,
+      })),
+    );
+  const savedChatsCount = useChatStore((s) =>
+    s.conversations.reduce(
+      (count, c) => count + (c.messages.length > 0 ? 1 : 0),
+      0,
+    ),
+  );
 
   useEffect(() => {
     if (isOpen && activeDoc?.id) {
@@ -93,9 +108,8 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
       }
     }
 
-    const chats = conversations.filter((c) => c.messages.length > 0).length;
-    return { highlights, underlines, notes, crops, chats };
-  }, [annotations, conversations]);
+    return { highlights, underlines, notes, crops, chats: savedChatsCount };
+  }, [annotations, savedChatsCount]);
 
   const updateWidth = (next: number) => {
     const clamped = clampWidth(next);

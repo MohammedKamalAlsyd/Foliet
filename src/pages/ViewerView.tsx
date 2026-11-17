@@ -24,7 +24,7 @@ import { DocumentCatalogStorage } from "@/services/storage/catalog";
 import { DocumentDatabase } from "@/services/storage/database";
 import { SettingsStorage } from "@/services/storage/settings";
 import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
-import { useAiStore } from "@/stores/aiStore";
+import { useAiStudioStore } from "@/stores/aiStudioStore";
 import { useSystemStore } from "@/stores/systemStore";
 import {
   type BurnableAnnotation,
@@ -68,7 +68,7 @@ export function ViewerView() {
   const clearDirty = useDocumentStore((s) => s.clearDirty);
   const setDocPageCount = useDocumentStore((s) => s.setDocPageCount);
   const shortcutModifier = useSystemStore((s) => s.shortcutModifier);
-  const isAiStudioOpen = useAiStore((s) => s.isAiStudioOpen);
+  const isAiStudioOpen = useAiStudioStore((s) => s.isAiStudioOpen);
 
   const [pdfProxy, setPdfProxy] = useState<any | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);

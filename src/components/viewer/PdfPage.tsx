@@ -3,7 +3,7 @@ import { Page } from "react-pdf";
 import { MessageSquare, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SelectionActionBar } from "@/components/viewer/SelectionActionBar";
-import { useAiStore } from "@/stores/aiStore";
+import { useRagStore } from "@/stores/ragStore";
 import {
   type InkAnnotation,
   type NoteAnnotation,
@@ -179,9 +179,9 @@ export const PdfPage = memo(function PdfPage({
     rect: DOMRect;
   } | null>(null);
 
-  const activeRagHighlight = useAiStore((s) => s.activeRagHighlight);
+  const activeRagHighlight = useRagStore((s) => s.activeRagHighlight);
   const isRagHighlighted = Boolean(
-    activeRagHighlight && activeRagHighlight.pageNumber === pageNumber
+    activeRagHighlight && activeRagHighlight.pageNumber === pageNumber,
   );
 
   // Clear selection action bar if tool changes away from select
@@ -704,7 +704,10 @@ export const PdfPage = memo(function PdfPage({
           aria-label="RAG search highlight"
           className="absolute top-3 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-[var(--accent-brand,#2563EB)]/40 bg-card/95 px-3 py-1 text-xs shadow-md backdrop-blur-md animate-in fade-in zoom-in-95 duration-200 select-none"
         >
-          <Sparkles size={13} className="text-[var(--accent-brand,#2563EB)] shrink-0" />
+          <Sparkles
+            size={13}
+            className="text-[var(--accent-brand,#2563EB)] shrink-0"
+          />
           <span className="font-semibold text-foreground shrink-0">
             RAG Match ({Math.round(activeRagHighlight.similarityScore * 100)}%)
           </span>
@@ -715,7 +718,7 @@ export const PdfPage = memo(function PdfPage({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              useAiStore.getState().setActiveRagHighlight(null);
+              useRagStore.getState().setActiveRagHighlight(null);
             }}
             title="Dismiss RAG highlight"
             className="flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

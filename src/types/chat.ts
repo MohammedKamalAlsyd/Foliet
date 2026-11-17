@@ -1,15 +1,7 @@
 /**
  * Foliet - Chat, LLM & Reasoning Types
  */
-import type {
-    EmbeddingProvider,
-    ModelStatus,
-    ModelDownloadProgress,
-    RagCatalog,
-    DocumentChunk,
-    RagSearchResult,
-    RagHyperparameters,
-} from "./embedding";
+import type { EmbeddingProvider, RagHyperparameters } from "./embedding";
 
 export type LlmProvider =
     | "openrouter"
@@ -56,7 +48,7 @@ export interface ChatConversation {
 }
 
 /**
- * Global AI state combining conversational LLM and embedding/RAG retrieval.
+ * Persisted AI configuration matching `SettingsStorage`.
  */
 export interface AiConfigState {
     // LLM Config
@@ -69,30 +61,6 @@ export interface AiConfigState {
     embeddingProvider: EmbeddingProvider;
     embeddingModel: string;
     embeddingApiKey: string;
-
-    // Local Model Lifecycle
-    localModelStatus: ModelStatus | null;
-    downloadProgress: ModelDownloadProgress | null;
-    isDownloadingModel: boolean;
-
-    // Indexing & Catalog
-    isIndexing: boolean;
-    indexingDocId: string | null;
-    indexingProgress: number;
-    indexingError: string | null;
-    catalog: RagCatalog;
-
-    // Chunk Inspection
-    isInspectChunksMode: boolean;
-    inspectedChunks: DocumentChunk[];
-    isLoadingChunks: boolean;
-
-    // RAG Search State
-    ragQuery: string;
-    ragResults: RagSearchResult[];
-    isSearchingRag: boolean;
-    searchScope: "current" | "all";
-    activeRagHighlight: RagSearchResult | null;
 
     // Hyperparameters
     hyperparameters: RagHyperparameters;

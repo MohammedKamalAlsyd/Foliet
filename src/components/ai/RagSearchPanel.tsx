@@ -8,6 +8,7 @@
  */
 
 import React, { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   AlertCircle,
   CheckCircle2,
@@ -33,8 +34,9 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { EMBEDDING_PRESETS } from "@/constants/models";
-import { useAiStore } from "@/stores/aiStore";
+import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useDocumentStore } from "@/stores/documentStore";
+import { useRagStore } from "@/stores/ragStore";
 import type { EmbeddingProvider, RagSearchResult } from "@/types/embedding";
 import { cn } from "@/lib/utils";
 
@@ -66,8 +68,6 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
     searchRag,
     activeRagHighlight,
     setActiveRagHighlight,
-    hyperparameters,
-    setHyperparameters,
     isIndexing,
     indexingProgress,
     indexingProgressDetail,
@@ -86,13 +86,60 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
     inspectedChunks,
     isLoadingChunks,
     inspectChunksForDocument,
+  } = useRagStore(
+    useShallow((s) => ({
+      catalog: s.catalog,
+      searchScope: s.searchScope,
+      setSearchScope: s.setSearchScope,
+      ragQuery: s.ragQuery,
+      setRagQuery: s.setRagQuery,
+      ragResults: s.ragResults,
+      isSearchingRag: s.isSearchingRag,
+      searchRag: s.searchRag,
+      activeRagHighlight: s.activeRagHighlight,
+      setActiveRagHighlight: s.setActiveRagHighlight,
+      isIndexing: s.isIndexing,
+      indexingProgress: s.indexingProgress,
+      indexingProgressDetail: s.indexingProgressDetail,
+      indexingError: s.indexingError,
+      indexDocument: s.indexDocument,
+      removeDocumentIndex: s.removeDocumentIndex,
+      localModelStatus: s.localModelStatus,
+      isDownloadingModel: s.isDownloadingModel,
+      downloadProgress: s.downloadProgress,
+      downloadedModels: s.downloadedModels,
+      isDeletingModel: s.isDeletingModel,
+      downloadLocalModel: s.downloadLocalModel,
+      deleteLocalModel: s.deleteLocalModel,
+      isInspectChunksMode: s.isInspectChunksMode,
+      setInspectChunksMode: s.setInspectChunksMode,
+      inspectedChunks: s.inspectedChunks,
+      isLoadingChunks: s.isLoadingChunks,
+      inspectChunksForDocument: s.inspectChunksForDocument,
+    })),
+  );
+
+  const {
+    hyperparameters,
+    setHyperparameters,
     embeddingProvider,
     embeddingModel,
     embeddingApiKey,
     setEmbeddingProvider,
     setEmbeddingModel,
     setEmbeddingApiKey,
-  } = useAiStore();
+  } = useAiConfigStore(
+    useShallow((s) => ({
+      hyperparameters: s.hyperparameters,
+      setHyperparameters: s.setHyperparameters,
+      embeddingProvider: s.embeddingProvider,
+      embeddingModel: s.embeddingModel,
+      embeddingApiKey: s.embeddingApiKey,
+      setEmbeddingProvider: s.setEmbeddingProvider,
+      setEmbeddingModel: s.setEmbeddingModel,
+      setEmbeddingApiKey: s.setEmbeddingApiKey,
+    })),
+  );
 
   const [searchInput, setSearchInput] = useState(ragQuery);
   const [selectedPageFilter, setSelectedPageFilter] = useState<number | "all">(

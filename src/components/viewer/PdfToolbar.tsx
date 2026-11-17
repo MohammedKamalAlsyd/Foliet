@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   Check,
   ChevronDown,
@@ -37,7 +38,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { AiMascot } from "@/components/ai/AiMascot";
-import { useAiStore } from "@/stores/aiStore";
+import { useAiStudioStore } from "@/stores/aiStudioStore";
 import {
   type ActiveToolState,
   type ToolPreset,
@@ -114,8 +115,12 @@ export function PdfToolbar({
     presets[0]?.id ?? "",
   );
 
-  const isAiStudioOpen = useAiStore((s) => s.isAiStudioOpen);
-  const toggleAiStudio = useAiStore((s) => s.toggleAiStudio);
+  const { isAiStudioOpen, toggleAiStudio } = useAiStudioStore(
+    useShallow((s) => ({
+      isAiStudioOpen: s.isAiStudioOpen,
+      toggleAiStudio: s.toggleAiStudio,
+    })),
+  );
 
   useEffect(() => {
     if (activeState.activePresetId) {
