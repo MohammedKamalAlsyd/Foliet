@@ -19,13 +19,17 @@ import { cn } from "@/lib/utils";
 import { WindowService } from "@/services/window";
 import { useSystemStore } from "@/stores/systemStore";
 import { useDocumentStore } from "@/stores/documentStore";
-import type { TitlebarProps } from "@/types/props";
 
 const TRAFFIC_COLORS = {
   close: "border-[#E0443E] bg-[#FF5F56] text-[#4C0000]",
   minimize: "border-[#DEA123] bg-[#FFBD2E] text-[#5B3C00]",
   zoom: "border-[#1AAB29] bg-[#27C93F] text-[#004D00]",
 } as const;
+
+interface TitlebarProps {
+  onRequestClose?: () => void;
+  onNavigateHome?: () => void;
+}
 
 export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
   const isMac = useSystemStore((s) => s.isMac);

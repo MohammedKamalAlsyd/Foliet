@@ -1,8 +1,25 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { type LogoProps, type LogoSize, LOGO_SIZES } from "@/types/props";
 
 const FOLIO_ANGLES = [0, 45, 90, 135] as const;
+const LOGO_SIZES = {
+  sm: 28,
+  md: 44,
+  lg: 68,
+  xl: 96,
+} as const;
+
+type LogoPresetSize = keyof typeof LOGO_SIZES;
+type LogoSize = LogoPresetSize | number;
+
+interface LogoProps {
+  size?: LogoSize;
+  showText?: boolean;
+  subtitle?: string;
+  className?: string;
+  textClassName?: string;
+  onClick?: () => void;
+}
 
 const resolveLogoSize = (size: LogoSize = "md") =>
   typeof size === "number" ? size : (LOGO_SIZES[size] ?? LOGO_SIZES.md);
