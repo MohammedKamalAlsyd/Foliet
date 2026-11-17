@@ -86,7 +86,7 @@ pub async fn rag_index_document(
         },
     );
 
-    // 1. Extract text, validate against scanned PDFs, filter junk, and chunk inside spawn_blocking
+    // 1. Extract text, line bounding boxes, validate against scanned PDFs, filter junk, and chunk
     let app_for_extract = app.clone();
     let doc_id_for_extract = doc_id.clone();
     let path_buf = PathBuf::from(&file_path);
@@ -164,7 +164,7 @@ pub async fn rag_index_document(
         .map(|v| v.len())
         .ok_or_else(|| "Embedding returned zero vectors.".to_string())?;
 
-    // 3. Persist chunks & normalized f32 BLOBs inside a single SQLite transaction
+    // 3. Persist chunks, bounding boxes & normalized f32 BLOBs inside a single SQLite transaction
     let _ = app.emit(
         "rag_index_progress",
         RagIndexProgress {
@@ -181,12 +181,20 @@ pub async fn rag_index_document(
     let rows: Vec<ChunkInsertRow> = prepared_chunks
         .into_iter()
         .zip(vectors.into_iter())
-        .map(|(chunk, embedding)| ChunkInsertRow {
-            chunk_id: chunk.chunk_id,
-            page_number: chunk.page_number,
-            chunk_index: chunk.chunk_index,
-            text: chunk.text,
-            embedding,
+        .map(|(chunk, embedding)| {
+            let rects_json = if chunk.rect_segments.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&chunk.rect_segments).ok()
+            };
+            ChunkInsertRow {
+                chunk_id: chunk.chunk_id,
+                page_number: chunk.page_number,
+                chunk_index: chunk.chunk_index,
+                text: chunk.text,
+                embedding,
+                rects_json,
+            }
         })
         .collect();
 
@@ -318,6 +326,7 @@ pub async fn rag_search(
                     page_number: row.page_number,
                     text: row.text,
                     similarity_score: (score * 1000.0).round() / 1000.0,
+                    rect_segments: db::parse_rects_json(row.rects_json),
                 })
             } else {
                 None

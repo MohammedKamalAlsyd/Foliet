@@ -6,7 +6,7 @@
  */
 
 import { create } from "zustand";
-import { SettingsStorage } from "@/services/storage/settings";
+import { SettingsStorage, type AiSettings } from "@/services/storage/settings";
 import {
     DEFAULT_AI_SETTINGS,
     DEFAULT_RAG_HYPERPARAMETERS,
@@ -26,6 +26,7 @@ export interface AiConfigStore extends AiConfigState {
     setLlmModel: (model: string) => Promise<void>;
     setApiKey: (provider: LlmProvider, key: string) => Promise<void>;
     setOllamaEndpoint: (endpoint: string) => Promise<void>;
+    setWebSearchEnabled: (enabled: boolean) => Promise<void>;
     setEmbeddingProvider: (provider: EmbeddingProvider) => Promise<void>;
     setEmbeddingModel: (model: string) => Promise<void>;
     setEmbeddingApiKey: (key: string) => Promise<void>;
@@ -49,6 +50,7 @@ export const useAiConfigStore = create<AiConfigStore>((set, get) => ({
     llmModel: DEFAULT_AI_SETTINGS.llmModel,
     apiKeys: { ...DEFAULT_API_KEYS },
     ollamaEndpoint: DEFAULT_AI_SETTINGS.ollamaEndpoint,
+    webSearchEnabled: DEFAULT_AI_SETTINGS.webSearchEnabled,
 
     embeddingProvider: DEFAULT_AI_SETTINGS.embeddingProvider,
     embeddingModel: DEFAULT_AI_SETTINGS.embeddingModel,
@@ -84,6 +86,9 @@ export const useAiConfigStore = create<AiConfigStore>((set, get) => ({
                         llmModel: saved.llmModel,
                         apiKeys: mergedKeys,
                         ollamaEndpoint: saved.ollamaEndpoint,
+                        webSearchEnabled: Boolean(
+                            (saved as AiSettings & { webSearchEnabled?: boolean }).webSearchEnabled
+                        ),
                         embeddingProvider: saved.embeddingProvider,
                         embeddingModel: saved.embeddingModel,
                         embeddingApiKey: saved.embeddingApiKey,
@@ -125,6 +130,13 @@ export const useAiConfigStore = create<AiConfigStore>((set, get) => ({
     setOllamaEndpoint: async (endpoint) => {
         set({ ollamaEndpoint: endpoint });
         await SettingsStorage.saveAiSettings({ ollamaEndpoint: endpoint });
+    },
+
+    setWebSearchEnabled: async (enabled) => {
+        set({ webSearchEnabled: enabled });
+        await SettingsStorage.saveAiSettings({
+            webSearchEnabled: enabled,
+        } as Partial<AiSettings>);
     },
 
     setEmbeddingProvider: async (provider) => {
@@ -182,6 +194,7 @@ export const useAiConfigStore = create<AiConfigStore>((set, get) => ({
             llmModel: defaults.llmModel,
             apiKeys: { ...DEFAULT_API_KEYS },
             ollamaEndpoint: defaults.ollamaEndpoint,
+            webSearchEnabled: false,
             embeddingProvider: defaults.embeddingProvider,
             embeddingModel: defaults.embeddingModel,
             embeddingApiKey: defaults.embeddingApiKey,

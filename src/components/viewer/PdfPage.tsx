@@ -163,6 +163,7 @@ export const PdfPage = memo(function PdfPage({
 }: PdfPageProps) {
   const wrapperRef = useRef<HTMLDivElement | null>(null);
   const bufferCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ragSpotlightRef = useRef<HTMLDivElement | null>(null);
   const [discoveredDim, setDiscoveredDim] = useState<{
     width: number;
     height: number;
@@ -183,6 +184,23 @@ export const PdfPage = memo(function PdfPage({
   const isRagHighlighted = Boolean(
     activeRagHighlight && activeRagHighlight.pageNumber === pageNumber,
   );
+
+  // Smoothly scroll highlighted RAG bounding lines into the center of the viewport
+  useEffect(() => {
+    if (!isRagHighlighted || !activeRagHighlight?.rectSegments?.length) return;
+    const timer = window.setTimeout(() => {
+      ragSpotlightRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+        inline: "nearest",
+      });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [
+    isRagHighlighted,
+    activeRagHighlight?.chunkId,
+    activeRagHighlight?.rectSegments,
+  ]);
 
   // Clear selection action bar if tool changes away from select
   useEffect(() => {
@@ -489,6 +507,13 @@ export const PdfPage = memo(function PdfPage({
   const renderScale = renderZoomLevel / 100;
   const cssScale = zoomLevel / renderZoomLevel;
 
+  const ragRects = isRagHighlighted
+    ? activeRagHighlight?.rectSegments
+    : undefined;
+  const ragSpotlightScrollIdx = ragRects?.length
+    ? Math.floor(ragRects.length / 2)
+    : -1;
+
   return (
     <div
       ref={setRefs}
@@ -540,8 +565,22 @@ export const PdfPage = memo(function PdfPage({
         />
       </div>
 
-      {/* Rendered text markups */}
+      {/* Rendered text markups & multi-line RAG spotlight */}
       <div className="pointer-events-none absolute inset-0 z-10">
+        {ragRects?.map((seg, idx) => (
+          <div
+            key={`rag-spot-${activeRagHighlight?.chunkId ?? "chunk"}-${idx}`}
+            ref={idx === ragSpotlightScrollIdx ? ragSpotlightRef : undefined}
+            style={{
+              left: `${seg.x * 100}%`,
+              top: `${seg.y * 100}%`,
+              width: `${seg.width * 100}%`,
+              height: `${seg.height * 100}%`,
+            }}
+            className="absolute animate-pulse rounded-[2px] border-b-2 border-[var(--accent-brand,#2563EB)] bg-[var(--accent-brand,#2563EB)]/20"
+          />
+        ))}
+
         {textMarkups.map((annot) => (
           <div
             key={annot.id}

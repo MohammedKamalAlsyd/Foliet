@@ -8,6 +8,13 @@ export type EmbeddingProvider =
     | "openai"
     | "ollama";
 
+export interface RectSegment {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
+
 export interface EmbeddingConfig {
     provider: EmbeddingProvider;
     model: string;
@@ -30,6 +37,7 @@ export interface DocumentChunk {
     chunkIndex: number;
     text: string;
     embedding?: number[];
+    rectSegments?: RectSegment[];
 }
 
 export interface CatalogEntry {
@@ -109,6 +117,7 @@ export interface RagSearchResult {
     pageNumber: number;
     text: string;
     similarityScore: number;
+    rectSegments?: RectSegment[];
 }
 
 /**

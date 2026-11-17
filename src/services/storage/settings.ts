@@ -16,6 +16,7 @@ export interface AiSettings {
     llmModel: string;
     apiKeys: Partial<Record<LlmProvider, string>>;
     ollamaEndpoint: string;
+    webSearchEnabled?: boolean;
     embeddingProvider: EmbeddingProvider;
     embeddingModel: string;
     embeddingApiKey: string;

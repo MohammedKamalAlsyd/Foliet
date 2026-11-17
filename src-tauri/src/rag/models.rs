@@ -2,6 +2,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RectSegment {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EmbeddingConfig {
     pub provider: String,
     pub model: String,
@@ -135,6 +144,8 @@ pub struct DocumentChunk {
     pub page_number: usize,
     pub chunk_index: usize,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect_segments: Option<Vec<RectSegment>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,4 +169,6 @@ pub struct RagSearchResult {
     pub page_number: usize,
     pub text: String,
     pub similarity_score: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect_segments: Option<Vec<RectSegment>>,
 }

@@ -150,7 +150,10 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
       <aside
         style={{ width }}
         aria-label="AI Studio Sidebar"
-        className="relative z-20 flex h-full shrink-0 flex-col border-l border-border bg-card shadow-[-4px_0_12px_rgba(0,0,0,0.03)] select-none"
+        className={cn(
+          "relative z-20 flex h-full shrink-0 flex-col border-l border-border bg-card shadow-[-4px_0_12px_rgba(0,0,0,0.03)]",
+          isResizing && "select-none",
+        )}
       >
         <Tabs
           value={
@@ -164,7 +167,7 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
           className="flex h-full flex-col overflow-hidden"
         >
           {/* 48px Top Tab Bar: Matches PdfSidebar & PdfToolbar alignment */}
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-muted/30 px-2.5">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-muted/30 px-2.5 select-none">
             <TabsList className="h-8 gap-0.5 rounded-lg bg-background/80 p-0.5 border border-border/60">
               <TabsTrigger
                 value="chat"
@@ -322,7 +325,7 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
             else if (e.key === "ArrowRight") updateWidth(width - 16);
           }}
           className={cn(
-            "absolute top-0 -left-1 z-20 h-full w-2 cursor-col-resize",
+            "absolute top-0 -left-1 z-20 h-full w-2 cursor-col-resize select-none",
             "after:absolute after:top-0 after:bottom-0 after:left-[3px] after:w-0.5 after:transition-colors after:duration-150 after:ease-[var(--ease-foliet)]",
             isResizing
               ? "after:bg-[var(--accent-brand)]"
@@ -331,7 +334,10 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
         />
       </aside>
 
-      <SummarizationWorkspace annotations={annotations} />
+      <SummarizationWorkspace
+        annotations={annotations}
+        onJumpToPage={onJumpToPage}
+      />
     </>
   );
 };

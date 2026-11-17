@@ -253,11 +253,12 @@ export const DEFAULT_RAG_HYPERPARAMETERS: RagHyperparameters = {
     vectorDimension: 384, // Matches Xenova/gte-small default
 };
 
-export const DEFAULT_AI_SETTINGS: AiSettings = {
+export const DEFAULT_AI_SETTINGS: AiSettings & { webSearchEnabled: boolean } = {
     llmProvider: "openrouter",
-    llmModel: "anthropic/claude-3.5-sonnet",
+    llmModel: "deepseek/deepseek-v4.1-flash",
     apiKeys: {},
     ollamaEndpoint: "http://localhost:11434",
+    webSearchEnabled: false,
     embeddingProvider: "local-rust",
     embeddingModel: "Xenova/gte-small",
     embeddingApiKey: "",

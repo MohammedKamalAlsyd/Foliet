@@ -2,7 +2,7 @@ use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
-use super::models::{CatalogEntry, DocumentChunk, RagCatalog};
+use super::models::{CatalogEntry, DocumentChunk, RagCatalog, RectSegment};
 
 pub struct ChunkInsertRow {
     pub chunk_id: String,
@@ -10,6 +10,7 @@ pub struct ChunkInsertRow {
     pub chunk_index: usize,
     pub text: String,
     pub embedding: Vec<f32>,
+    pub rects_json: Option<String>,
 }
 
 pub struct StoredVectorRow {
@@ -19,6 +20,7 @@ pub struct StoredVectorRow {
     pub page_number: usize,
     pub text: String,
     pub embedding_bytes: Vec<u8>,
+    pub rects_json: Option<String>,
 }
 
 fn open_connection(db_path: &Path) -> Result<Connection, String> {
@@ -53,6 +55,7 @@ pub fn init_db(db_path: &Path) -> Result<(), String> {
             chunk_index INTEGER NOT NULL,
             text TEXT NOT NULL,
             embedding BLOB NOT NULL,
+            rects_json TEXT,
             FOREIGN KEY (doc_id) REFERENCES rag_documents(doc_id) ON DELETE CASCADE
         );
 
@@ -60,6 +63,26 @@ pub fn init_db(db_path: &Path) -> Result<(), String> {
             ON rag_chunks (doc_id);",
     )
     .map_err(|e| format!("Failed to initialize rag.db schema: {}", e))?;
+
+    // Migrate existing rag.db tables created before rects_json was introduced
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(rag_chunks)")
+        .map_err(|e| format!("Failed to inspect rag_chunks schema: {}", e))?;
+    let cols = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("Failed to read rag_chunks columns: {}", e))?;
+    let mut has_rects_json = false;
+    for col in cols {
+        if col.map_err(|e| format!("Column error: {}", e))? == "rects_json" {
+            has_rects_json = true;
+            break;
+        }
+    }
+    if !has_rects_json {
+        conn.execute("ALTER TABLE rag_chunks ADD COLUMN rects_json TEXT", [])
+            .map_err(|e| format!("Failed to add rects_json column: {}", e))?;
+    }
+
     Ok(())
 }
 
@@ -69,6 +92,11 @@ fn f32_slice_to_le_bytes(vec: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&v.to_le_bytes());
     }
     bytes
+}
+
+pub fn parse_rects_json(raw: Option<String>) -> Option<Vec<RectSegment>> {
+    raw.and_then(|s| serde_json::from_str::<Vec<RectSegment>>(&s).ok())
+        .filter(|v| !v.is_empty())
 }
 
 pub fn replace_document_index(
@@ -111,8 +139,8 @@ pub fn replace_document_index(
         let mut stmt = tx
             .prepare_cached(
                 "INSERT INTO rag_chunks
-                    (chunk_id, doc_id, page_number, chunk_index, text, embedding)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    (chunk_id, doc_id, page_number, chunk_index, text, embedding, rects_json)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )
             .map_err(|e| format!("Failed to prepare chunk insert: {}", e))?;
 
@@ -124,7 +152,8 @@ pub fn replace_document_index(
                 chunk.page_number as i64,
                 chunk.chunk_index as i64,
                 chunk.text,
-                blob
+                blob,
+                chunk.rects_json
             ])
             .map_err(|e| format!("Failed to insert chunk '{}': {}", chunk.chunk_id, e))?;
         }
@@ -191,7 +220,7 @@ pub fn get_document_chunks(db_path: &Path, doc_id: &str) -> Result<Vec<DocumentC
     let conn = open_connection(db_path)?;
     let mut stmt = conn
         .prepare(
-            "SELECT chunk_id, page_number, chunk_index, text
+            "SELECT chunk_id, page_number, chunk_index, text, rects_json
              FROM rag_chunks
              WHERE doc_id = ?1
              ORDER BY chunk_index ASC",
@@ -200,11 +229,13 @@ pub fn get_document_chunks(db_path: &Path, doc_id: &str) -> Result<Vec<DocumentC
 
     let rows = stmt
         .query_map(params![doc_id], |row| {
+            let rects_raw: Option<String> = row.get(4)?;
             Ok(DocumentChunk {
                 chunk_id: row.get(0)?,
                 page_number: row.get::<_, i64>(1)? as usize,
                 chunk_index: row.get::<_, i64>(2)? as usize,
                 text: row.get(3)?,
+                rect_segments: parse_rects_json(rects_raw),
             })
         })
         .map_err(|e| format!("Failed to query chunks: {}", e))?;
@@ -248,7 +279,7 @@ pub fn load_candidate_vectors(
     if let Some(doc_id) = target_doc_id {
         let mut stmt = conn
             .prepare(
-                "SELECT c.chunk_id, c.doc_id, d.doc_title, c.page_number, c.text, c.embedding
+                "SELECT c.chunk_id, c.doc_id, d.doc_title, c.page_number, c.text, c.embedding, c.rects_json
                  FROM rag_chunks c
                  INNER JOIN rag_documents d ON c.doc_id = d.doc_id
                  WHERE c.doc_id = ?1 AND d.dimensions = ?2",
@@ -264,6 +295,7 @@ pub fn load_candidate_vectors(
                     page_number: row.get::<_, i64>(3)? as usize,
                     text: row.get(4)?,
                     embedding_bytes: row.get(5)?,
+                    rects_json: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Failed to query doc vectors: {}", e))?;
@@ -274,7 +306,7 @@ pub fn load_candidate_vectors(
     } else {
         let mut stmt = conn
             .prepare(
-                "SELECT c.chunk_id, c.doc_id, d.doc_title, c.page_number, c.text, c.embedding
+                "SELECT c.chunk_id, c.doc_id, d.doc_title, c.page_number, c.text, c.embedding, c.rects_json
                  FROM rag_chunks c
                  INNER JOIN rag_documents d ON c.doc_id = d.doc_id
                  WHERE d.embedding_model = ?1 AND d.dimensions = ?2",
@@ -290,6 +322,7 @@ pub fn load_candidate_vectors(
                     page_number: row.get::<_, i64>(3)? as usize,
                     text: row.get(4)?,
                     embedding_bytes: row.get(5)?,
+                    rects_json: row.get(6)?,
                 })
             })
             .map_err(|e| format!("Failed to query global vectors: {}", e))?;

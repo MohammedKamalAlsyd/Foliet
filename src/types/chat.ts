@@ -29,12 +29,24 @@ export interface CitationReference {
     snippet: string;
 }
 
+export type ToolCallName = "navigate_to" | "highlight_passage" | "explain_figure";
+
+export interface ExecutedToolCall {
+    id: string;
+    name: ToolCallName | string;
+    arguments: Record<string, any>;
+    result: string;
+    status: "success" | "error";
+    badgeLabel: string;
+}
+
 export interface ChatMessage {
     id: string;
     role: MessageRole;
     content: string;
     timestamp: number;
     citations?: CitationReference[];
+    toolCalls?: ExecutedToolCall[];
     isStreaming?: boolean;
 }
 
@@ -56,6 +68,7 @@ export interface AiConfigState {
     llmModel: string;
     apiKeys: Record<LlmProvider, string>;
     ollamaEndpoint: string;
+    webSearchEnabled: boolean;
 
     // Embedding Config
     embeddingProvider: EmbeddingProvider;

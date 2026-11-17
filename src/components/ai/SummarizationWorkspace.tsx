@@ -18,6 +18,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { toast } from "sonner";
 import {
+  ArrowUpRight,
   Check,
   ChevronDown,
   ChevronRight,
@@ -42,6 +43,7 @@ import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
+import { useRagStore } from "@/stores/ragStore";
 import { useSummaryStore } from "@/stores/summaryStore";
 import { useSystemStore } from "@/stores/systemStore";
 import {
@@ -57,6 +59,7 @@ import { cn } from "@/lib/utils";
 
 interface SummarizationWorkspaceProps {
   annotations?: PdfAnnotation[];
+  onJumpToPage?: (page: number) => void;
 }
 
 const FOCUS_OPTIONS: Array<{ value: SummaryFocusMode; label: string }> = [
@@ -102,6 +105,7 @@ const CropThumbnail: React.FC<{ src: string; alt: string }> = ({
 
 export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   annotations: liveAnnotations,
+  onJumpToPage,
 }) => {
   const activeDoc = useDocumentStore((s) => s.activeDoc);
   const theme = useSystemStore((s) => s.theme);
@@ -310,6 +314,43 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     loadSummary,
     setSummaryWorkspaceOpen,
   ]);
+
+  const handleJumpToPage = useCallback(
+    (
+      pageNumber: number,
+      highlight?: {
+        id: string;
+        text: string;
+        rectSegments?: TextMarkupAnnotation["rectSegments"];
+      },
+    ) => {
+      if (!onJumpToPage) return;
+
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+        autoSaveTimerRef.current = null;
+      }
+      if (pendingSaveMarkdownRef.current !== null) {
+        void flushAutoSave(pendingSaveMarkdownRef.current);
+      }
+
+      if (highlight && docId) {
+        useRagStore.getState().setActiveRagHighlight({
+          chunkId: highlight.id,
+          docId,
+          docTitle,
+          pageNumber,
+          text: highlight.text,
+          similarityScore: 1.0,
+          rectSegments: highlight.rectSegments,
+        });
+      }
+
+      setSummaryWorkspaceOpen(false);
+      onJumpToPage(pageNumber);
+    },
+    [onJumpToPage, flushAutoSave, docId, docTitle, setSummaryWorkspaceOpen],
+  );
 
   const handleGenerate = async () => {
     if (!docId) return;
@@ -593,9 +634,15 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                 return (
                   <section key={pageNum} className="space-y-2">
                     <div className="flex items-center justify-between px-1">
-                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                        Page {pageNum}
-                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleJumpToPage(pageNum)}
+                        title={`Jump to Page ${pageNum}`}
+                        className="inline-flex items-center gap-1 rounded px-1 py-0.5 font-mono text-xs tabular-nums text-muted-foreground transition-colors hover:bg-muted hover:text-[var(--accent-brand,#2563EB)]"
+                      >
+                        <span>Page {pageNum}</span>
+                        <ArrowUpRight size={11} strokeWidth={1.75} />
+                      </button>
                       <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                         {pageHighlights.length +
                           pageNotes.length +
@@ -607,10 +654,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                     {pageHighlights.map((item) => {
                       const checked = !excludedIds.has(item.id);
                       return (
-                        <label
+                        <div
                           key={item.id}
                           className={cn(
-                            "flex cursor-pointer items-start gap-2 rounded-xl border bg-card p-3 text-xs transition-colors duration-150 ease-[var(--ease-foliet)]",
+                            "flex items-start gap-2 rounded-xl border bg-card p-3 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:border-[var(--accent-brand,#2563EB)]/40",
                             checked
                               ? "border-border"
                               : "border-border/50 opacity-55",
@@ -618,27 +665,45 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                         >
                           <input
                             type="checkbox"
+                            aria-label={`Include ${item.toolType} from Page ${item.pageNumber}`}
                             checked={checked}
                             onChange={() => toggleAnnotationIncluded(item.id)}
-                            className="mt-0.5 shrink-0 accent-[var(--accent-brand)]"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-[var(--accent-brand)]"
                           />
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                              <span
-                                className="h-2 w-2 shrink-0 rounded-full"
-                                style={{
-                                  backgroundColor: item.color,
-                                }}
-                              />
-                              <span className="capitalize">
-                                {item.toolType}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleJumpToPage(item.pageNumber, {
+                                id: item.id,
+                                text: item.text,
+                                rectSegments: item.rectSegments,
+                              })
+                            }
+                            title={`Jump to Page ${item.pageNumber}`}
+                            className="min-w-0 flex-1 space-y-1 text-left cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                              <span className="flex items-center gap-2">
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{
+                                    backgroundColor: item.color,
+                                  }}
+                                />
+                                <span className="capitalize">
+                                  {item.toolType}
+                                </span>
                               </span>
+                              <ArrowUpRight
+                                size={11}
+                                className="shrink-0 opacity-60"
+                              />
                             </div>
                             <p className="leading-relaxed text-foreground">
                               {item.text}
                             </p>
-                          </div>
-                        </label>
+                          </button>
+                        </div>
                       );
                     })}
 
@@ -646,10 +711,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                     {pageNotes.map((note) => {
                       const checked = !excludedIds.has(note.id);
                       return (
-                        <label
+                        <div
                           key={note.id}
                           className={cn(
-                            "flex cursor-pointer items-start gap-2 rounded-xl border bg-card p-3 text-xs transition-colors duration-150 ease-[var(--ease-foliet)]",
+                            "flex items-start gap-2 rounded-xl border bg-card p-3 text-xs transition-colors duration-150 ease-[var(--ease-foliet)] hover:border-[var(--accent-brand,#2563EB)]/40",
                             checked
                               ? "border-border"
                               : "border-border/50 opacity-55",
@@ -657,25 +722,42 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                         >
                           <input
                             type="checkbox"
+                            aria-label={`Include note from Page ${note.pageNumber}`}
                             checked={checked}
                             onChange={() => toggleAnnotationIncluded(note.id)}
-                            className="mt-0.5 shrink-0 accent-[var(--accent-brand)]"
+                            className="mt-0.5 shrink-0 cursor-pointer accent-[var(--accent-brand)]"
                           />
-                          <div className="min-w-0 flex-1 space-y-1">
-                            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-                              <span
-                                className="h-2 w-2 shrink-0 rounded-full"
-                                style={{
-                                  backgroundColor: note.color,
-                                }}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleJumpToPage(note.pageNumber, {
+                                id: note.id,
+                                text: note.contextSnippet || note.comment,
+                              })
+                            }
+                            title={`Jump to Page ${note.pageNumber}`}
+                            className="min-w-0 flex-1 space-y-1 text-left cursor-pointer"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+                              <span className="flex items-center gap-2">
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{
+                                    backgroundColor: note.color,
+                                  }}
+                                />
+                                <span>Note</span>
+                              </span>
+                              <ArrowUpRight
+                                size={11}
+                                className="shrink-0 opacity-60"
                               />
-                              <span>Note</span>
                             </div>
                             <p className="leading-relaxed text-foreground">
                               {note.comment}
                             </p>
-                          </div>
-                        </label>
+                          </button>
+                        </div>
                       );
                     })}
 
@@ -688,30 +770,47 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                         <div
                           key={crop.id}
                           className={cn(
-                            "rounded-xl border bg-card p-3 space-y-2 transition-colors duration-150 ease-[var(--ease-foliet)]",
+                            "rounded-xl border bg-card p-3 space-y-2 transition-colors duration-150 ease-[var(--ease-foliet)] hover:border-[var(--accent-brand,#2563EB)]/40",
                             checked
                               ? "border-border"
                               : "border-border/50 opacity-55",
                           )}
                         >
                           <div className="flex items-center justify-between gap-2">
-                            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
                               <input
                                 type="checkbox"
+                                aria-label={`Include figure crop from Page ${crop.pageNumber}`}
                                 checked={checked}
                                 onChange={() =>
                                   toggleAnnotationIncluded(crop.id)
                                 }
-                                className="shrink-0 accent-[var(--accent-brand)]"
+                                className="shrink-0 cursor-pointer accent-[var(--accent-brand)]"
                               />
-                              <span
-                                className="h-2 w-2 shrink-0 rounded-full"
-                                style={{
-                                  backgroundColor: crop.color,
-                                }}
-                              />
-                              <span>Figure crop</span>
-                            </label>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleJumpToPage(crop.pageNumber, {
+                                    id: crop.id,
+                                    text: cropLabel,
+                                  })
+                                }
+                                title={`Jump to Page ${crop.pageNumber}`}
+                                className="flex items-center gap-2 hover:text-[var(--accent-brand,#2563EB)] cursor-pointer"
+                              >
+                                <span
+                                  className="h-2 w-2 shrink-0 rounded-full"
+                                  style={{
+                                    backgroundColor: crop.color,
+                                  }}
+                                />
+                                <span>Figure crop</span>
+                                <ArrowUpRight
+                                  size={11}
+                                  className="shrink-0 opacity-60"
+                                />
+                              </button>
+                            </div>
 
                             <Button
                               type="button"
@@ -731,7 +830,22 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                             </Button>
                           </div>
 
-                          <CropThumbnail src={crop.imageUrl} alt={cropLabel} />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              handleJumpToPage(crop.pageNumber, {
+                                id: crop.id,
+                                text: cropLabel,
+                              })
+                            }
+                            title={`Jump to Page ${crop.pageNumber}`}
+                            className="block w-full cursor-pointer text-left"
+                          >
+                            <CropThumbnail
+                              src={crop.imageUrl}
+                              alt={cropLabel}
+                            />
+                          </button>
                         </div>
                       );
                     })}
@@ -811,6 +925,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
             markdown={draftMarkdown}
             isStreaming={isSummarizing}
             onMarkdownChange={handleEditorMarkdownChange}
+            onJumpToPage={handleJumpToPage}
           />
         </main>
       </div>

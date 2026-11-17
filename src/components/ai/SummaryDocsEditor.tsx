@@ -2,14 +2,17 @@
  * Foliet - Rich Markdown Docs Editor (Tiptap)
  *
  * MIT Tiptap editor configured with StarterKit, CodeBlockLowlight,
- * @tiptap/markdown, and a custom CropAwareImage NodeView that resolves
- * SQLite-backed `idb://crop-...` figure crop URIs transparently.
+ * @tiptap/markdown, a custom CropAwareImage NodeView that resolves
+ * SQLite-backed `idb://crop-...` figure crop URIs transparently,
+ * and a living PageCitationDecorator that turns `[Page X]` / `(Page X)`
+ * references into clickable jump-and-spotlight badges.
  */
 
 import React, {
   forwardRef,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -20,6 +23,10 @@ import {
   useEditor,
   type NodeViewProps,
 } from "@tiptap/react";
+import { Extension } from "@tiptap/core";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import Image from "@tiptap/extension-image";
@@ -42,11 +49,130 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
+import { useDocumentStore } from "@/stores/documentStore";
+import { useRagStore } from "@/stores/ragStore";
 import { cn } from "@/lib/utils";
 
 const lowlight = createLowlight(common);
 const resolvedCropCache = new Map<string, string>();
+const pageCitationPluginKey = new PluginKey("folietPageCitations");
+const PAGE_CITATION_REGEX =
+  /(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])|(\(Page\s+(\d+)\))/gi;
+
+async function spotlightPageFromCitation(pageNumber: number): Promise<void> {
+  const activeDoc = useDocumentStore.getState().activeDoc;
+  if (!activeDoc) return;
+
+  try {
+    const chunks = await RagService.getDocumentChunks(activeDoc.id);
+    const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
+    if (pageChunks.length > 0) {
+      const mergedRects = pageChunks
+        .flatMap((c) => c.rectSegments ?? [])
+        .slice(0, 48);
+      useRagStore.getState().setActiveRagHighlight({
+        chunkId: pageChunks[0].chunkId,
+        docId: activeDoc.id,
+        docTitle: activeDoc.title,
+        pageNumber,
+        text: pageChunks[0].text,
+        similarityScore: 1.0,
+        rectSegments: mergedRects.length > 0 ? mergedRects : undefined,
+      });
+      return;
+    }
+  } catch {
+    // Fall back to page-level highlight if the document is not indexed
+  }
+
+  useRagStore.getState().setActiveRagHighlight({
+    chunkId: `summary-citation-page-${pageNumber}`,
+    docId: activeDoc.id,
+    docTitle: activeDoc.title,
+    pageNumber,
+    text: `Summary citation on Page ${pageNumber}`,
+    similarityScore: 1.0,
+  });
+}
+
+function buildCitationDecorations(doc: ProseMirrorNode): DecorationSet {
+  const decorations: Decoration[] = [];
+
+  doc.descendants((node, pos) => {
+    if (node.type.name === "codeBlock") {
+      return false;
+    }
+    if (!node.isText || !node.text) {
+      return true;
+    }
+
+    PAGE_CITATION_REGEX.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = PAGE_CITATION_REGEX.exec(node.text)) !== null) {
+      const pageStr = match[2] ?? match[4];
+      const pageNum = Number(pageStr);
+      if (!Number.isFinite(pageNum) || pageNum < 1) continue;
+
+      const from = pos + match.index;
+      const to = from + match[0].length;
+      decorations.push(
+        Decoration.inline(from, to, {
+          "data-citation-page": String(pageNum),
+          title: `Jump to Page ${pageNum} & spotlight chunks`,
+          class:
+            "inline-flex items-center rounded border border-[var(--accent-brand,#2563EB)]/35 bg-[var(--accent-brand,#2563EB)]/10 px-1.5 py-0 mx-0.5 font-mono text-[11px] font-medium text-[var(--accent-brand,#2563EB)] cursor-pointer transition-colors hover:bg-[var(--accent-brand,#2563EB)]/20",
+        }),
+      );
+    }
+
+    return true;
+  });
+
+  return DecorationSet.create(doc, decorations);
+}
+
+function createPageCitationExtension(
+  onJumpRef: React.MutableRefObject<((page: number) => void) | undefined>,
+) {
+  return Extension.create({
+    name: "pageCitationDecorator",
+    addProseMirrorPlugins() {
+      return [
+        new Plugin({
+          key: pageCitationPluginKey,
+          state: {
+            init: (_config, state) => buildCitationDecorations(state.doc),
+            apply: (tr, oldSet) =>
+              tr.docChanged ? buildCitationDecorations(tr.doc) : oldSet,
+          },
+          props: {
+            decorations(state) {
+              return pageCitationPluginKey.getState(state);
+            },
+            handleDOMEvents: {
+              click: (_view, event) => {
+                const target = event.target as HTMLElement | null;
+                const badge = target?.closest("[data-citation-page]");
+                if (!badge) return false;
+
+                const pageNum = Number(
+                  badge.getAttribute("data-citation-page"),
+                );
+                if (!Number.isFinite(pageNum) || pageNum < 1) return false;
+
+                onJumpRef.current?.(pageNum);
+                void spotlightPageFromCitation(pageNum);
+                return false;
+              },
+            },
+          },
+        }),
+      ];
+    },
+  });
+}
 
 /**
  * Resolves an `idb://...` or `db://...` crop URI from SQLite (cached in memory),
@@ -219,6 +345,7 @@ interface SummaryDocsEditorProps {
   markdown: string;
   isStreaming?: boolean;
   onMarkdownChange?: (nextMarkdown: string) => void;
+  onJumpToPage?: (page: number) => void;
 }
 
 interface ToolbarButtonProps {
@@ -261,13 +388,20 @@ export const SummaryDocsEditor = forwardRef<
   SummaryDocsEditorHandle,
   SummaryDocsEditorProps
 >(function SummaryDocsEditor(
-  { markdown, isStreaming = false, onMarkdownChange },
+  { markdown, isStreaming = false, onMarkdownChange, onJumpToPage },
   ref,
 ) {
   const lastSyncedMarkdownRef = useRef<string>(markdown);
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStreamingRef = useRef<boolean>(isStreaming);
+  const onJumpToPageRef = useRef(onJumpToPage);
   isStreamingRef.current = isStreaming;
+  onJumpToPageRef.current = onJumpToPage;
+
+  const citationExtension = useMemo(
+    () => createPageCitationExtension(onJumpToPageRef),
+    [],
+  );
 
   const editor = useEditor({
     extensions: [
@@ -283,6 +417,7 @@ export const SummaryDocsEditor = forwardRef<
         allowBase64: true,
       }),
       Markdown,
+      citationExtension,
     ],
     content: markdown || "",
     contentType: "markdown",
