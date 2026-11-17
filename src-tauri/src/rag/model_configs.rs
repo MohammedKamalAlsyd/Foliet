@@ -11,7 +11,7 @@ pub enum PoolingStrategy {
 pub struct ResolvedModelConfig {
     /// Original model ID requested by the user/UI
     pub requested_id: String,
-    /// Hugging Face repository ID (e.g., "Xenova/gte-small")
+    /// Hugging Face repository ID
     pub hf_repo_id: String,
     /// Candidate ONNX paths inside the HF repo, ordered fastest/quantized first
     pub onnx_candidates: Vec<&'static str>,
@@ -25,6 +25,7 @@ pub struct ResolvedModelConfig {
 
 const DEFAULT_ONNX_CANDIDATES: &[&str] = &[
     "onnx/model_quantized.onnx",
+    "onnx/model_qint8_avx2.onnx",
     "onnx/model_int8.onnx",
     "onnx/model.onnx",
     "model_quantized.onnx",
@@ -36,7 +37,72 @@ pub fn resolve_local_model_config(model_id: &str) -> ResolvedModelConfig {
     let trimmed = model_id.trim();
 
     match trimmed {
-        // Default GTE Small (supports legacy "thenlper/gte-small" saved settings via Xenova ONNX repo)
+        // M043: MedEmbed-small-v0.1 (BGE-small architecture: CLS pooling + query prefix)
+        "abhinand/MedEmbed-small-v0.1" => ResolvedModelConfig {
+            requested_id: trimmed.to_string(),
+            hf_repo_id: "abhinand/MedEmbed-small-v0.1".to_string(),
+            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
+            tokenizer_file: "tokenizer.json",
+            pooling: PoolingStrategy::Cls,
+            max_length: 512,
+            query_prefix: "Represent this sentence for searching relevant passages: ",
+            doc_prefix: "",
+            normalize: true,
+        },
+
+        // M097: all-MiniLM-L12-v2
+        "sentence-transformers/all-MiniLM-L12-v2" => ResolvedModelConfig {
+            requested_id: trimmed.to_string(),
+            hf_repo_id: "sentence-transformers/all-MiniLM-L12-v2".to_string(),
+            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
+            tokenizer_file: "tokenizer.json",
+            pooling: PoolingStrategy::Mean,
+            max_length: 512,
+            query_prefix: "",
+            doc_prefix: "",
+            normalize: true,
+        },
+
+        // M060: GIST-all-MiniLM-L6-v2
+        "avsolatorio/GIST-all-MiniLM-L6-v2" => ResolvedModelConfig {
+            requested_id: trimmed.to_string(),
+            hf_repo_id: "avsolatorio/GIST-all-MiniLM-L6-v2".to_string(),
+            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
+            tokenizer_file: "tokenizer.json",
+            pooling: PoolingStrategy::Mean,
+            max_length: 512,
+            query_prefix: "",
+            doc_prefix: "",
+            normalize: true,
+        },
+
+        // M077: Ivysaur
+        "Mihaiii/Ivysaur" => ResolvedModelConfig {
+            requested_id: trimmed.to_string(),
+            hf_repo_id: "Mihaiii/Ivysaur".to_string(),
+            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
+            tokenizer_file: "tokenizer.json",
+            pooling: PoolingStrategy::Mean,
+            max_length: 512,
+            query_prefix: "",
+            doc_prefix: "",
+            normalize: true,
+        },
+
+        // M093: gte-micro-v4
+        "Mihaiii/gte-micro-v4" => ResolvedModelConfig {
+            requested_id: trimmed.to_string(),
+            hf_repo_id: "Mihaiii/gte-micro-v4".to_string(),
+            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
+            tokenizer_file: "tokenizer.json",
+            pooling: PoolingStrategy::Mean,
+            max_length: 512,
+            query_prefix: "",
+            doc_prefix: "",
+            normalize: true,
+        },
+
+        // Legacy presets kept for backwards compatibility with previously indexed documents
         "Xenova/gte-small" | "thenlper/gte-small" => ResolvedModelConfig {
             requested_id: trimmed.to_string(),
             hf_repo_id: "Xenova/gte-small".to_string(),
@@ -49,7 +115,6 @@ pub fn resolve_local_model_config(model_id: &str) -> ResolvedModelConfig {
             normalize: true,
         },
 
-        // Default BGE Small EN v1.5 (uses BGE retrieval query instruction + CLS pooling)
         "Xenova/bge-small-en-v1.5" | "BAAI/bge-small-en-v1.5" => ResolvedModelConfig {
             requested_id: trimmed.to_string(),
             hf_repo_id: "Xenova/bge-small-en-v1.5".to_string(),
@@ -59,32 +124,6 @@ pub fn resolve_local_model_config(model_id: &str) -> ResolvedModelConfig {
             max_length: 512,
             query_prefix: "Represent this sentence for searching relevant passages: ",
             doc_prefix: "",
-            normalize: true,
-        },
-
-        // BGE Base / Large presets if typed manually
-        "Xenova/bge-base-en-v1.5" | "Xenova/bge-large-en-v1.5" => ResolvedModelConfig {
-            requested_id: trimmed.to_string(),
-            hf_repo_id: trimmed.to_string(),
-            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
-            tokenizer_file: "tokenizer.json",
-            pooling: PoolingStrategy::Cls,
-            max_length: 512,
-            query_prefix: "Represent this sentence for searching relevant passages: ",
-            doc_prefix: "",
-            normalize: true,
-        },
-
-        // E5 family presets if typed manually
-        id if id.contains("e5-") => ResolvedModelConfig {
-            requested_id: trimmed.to_string(),
-            hf_repo_id: trimmed.to_string(),
-            onnx_candidates: DEFAULT_ONNX_CANDIDATES.to_vec(),
-            tokenizer_file: "tokenizer.json",
-            pooling: PoolingStrategy::Mean,
-            max_length: 512,
-            query_prefix: "query: ",
-            doc_prefix: "passage: ",
             normalize: true,
         },
 

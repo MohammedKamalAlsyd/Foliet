@@ -9,19 +9,40 @@ import { AiSettings } from "@/services/storage/settings";
 export const EMBEDDING_PRESETS: Record<EmbeddingProvider, EmbeddingModelPreset[]> = {
     "local-rust": [
         {
-            id: "Xenova/gte-small",
-            label: "GTE Small (ONNX)",
+            id: "abhinand/MedEmbed-small-v0.1",
+            label: "MedEmbed Small v0.1 (33M)",
             dimensions: 384,
             provider: "local-rust",
-            description: "Fast, accurate quantized ONNX local embedding model. Recommended default.",
+            description: "Highest retrieval score (0.853) in benchmark; strong scientific and technical domain accuracy.",
             isDefault: true,
         },
         {
-            id: "Xenova/bge-small-en-v1.5",
-            label: "BGE Small EN v1.5 (ONNX)",
+            id: "sentence-transformers/all-MiniLM-L12-v2",
+            label: "all-MiniLM-L12-v2 (33M)",
             dimensions: 384,
             provider: "local-rust",
-            description: "High-performance compact ONNX retrieval model with query instruction prefix.",
+            description: "Reliable 12-layer MiniLM model (0.848) with official ONNX weights.",
+        },
+        {
+            id: "avsolatorio/GIST-all-MiniLM-L6-v2",
+            label: "GIST-all-MiniLM-L6-v2 (23M)",
+            dimensions: 384,
+            provider: "local-rust",
+            description: "Lightweight, fast 23M embedding model (0.831) for rapid document indexing.",
+        },
+        {
+            id: "Mihaiii/Ivysaur",
+            label: "Ivysaur (23M)",
+            dimensions: 384,
+            provider: "local-rust",
+            description: "Compact 23M general-purpose dense retrieval model (0.828).",
+        },
+        {
+            id: "Mihaiii/gte-micro-v4",
+            label: "GTE Micro v4 (19M)",
+            dimensions: 384,
+            provider: "local-rust",
+            description: "Ultra-fast 19M compact embedding model (0.822) with minimal memory footprint.",
         },
     ],
 
@@ -250,17 +271,17 @@ export const DEFAULT_RAG_HYPERPARAMETERS: RagHyperparameters = {
     similarityThreshold: 0.65,
     topK: 5,
     maxTokens: 1024,
-    vectorDimension: 384, // Matches Xenova/gte-small default
+    vectorDimension: 384,
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings & { webSearchEnabled: boolean } = {
     llmProvider: "openrouter",
-    llmModel: "deepseek/deepseek-v4.1-flash",
+    llmModel: "anthropic/claude-3.5-sonnet",
     apiKeys: {},
     ollamaEndpoint: "http://localhost:11434",
     webSearchEnabled: false,
     embeddingProvider: "local-rust",
-    embeddingModel: "Xenova/gte-small",
+    embeddingModel: "abhinand/MedEmbed-small-v0.1",
     embeddingApiKey: "",
     hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
 };
