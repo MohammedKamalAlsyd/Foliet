@@ -2,17 +2,8 @@
  * Foliet - LLM Service Types
  */
 
+import type { ToolSet } from "ai";
 import type { ChatMessage, LlmProvider } from "@/types/chat";
-
-export interface LlmToolDefinition {
-    name: string;
-    description: string;
-    parameters: {
-        type: "object";
-        properties: Record<string, any>;
-        required?: string[];
-    };
-}
 
 export interface LlmToolCall {
     id: string;
@@ -29,8 +20,8 @@ export interface StreamChatOptions {
     messages: ChatMessage[];
     systemPrompt?: string;
     onChunk: (chunk: string) => void;
-    onToolCalls?: (toolCalls: LlmToolCall[]) => void;
-    tools?: LlmToolDefinition[];
+    tools?: ToolSet;
+    maxSteps?: number;
     webSearchEnabled?: boolean;
     visionImages?: VisionImageInput[];
     signal?: AbortSignal;

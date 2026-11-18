@@ -14,6 +14,15 @@ import {
     formatSummaryContextBlocks,
 } from "@/utils/llmFormatting";
 
+const CITATION_FORMAT_RULE =
+    "Cite page numbers inline using bracketed format `[Page X]` (e.g., `[Page 4]`).";
+const FIGURE_SYNTAX_RULE =
+    "Embed figures on their own line using `![Concise figure description (Page X)](idb://crop-...)`. Never invent, modify, or shorten image URIs.";
+const FENCED_CODE_RULE =
+    "Whenever explaining an algorithm, formula, protocol, pseudocode, or code structure, ALWAYS wrap it in a fenced code block with an explicit language tag (e.g., ```python, ```typescript, ```rust, ```latex).";
+const MARKDOWN_ONLY_RULE =
+    "Return valid Markdown only—no conversational preamble or meta-commentary.";
+
 const SUMMARY_MODE_GUIDANCE: Record<SummaryFocusMode, string> = {
     study: [
         "STYLE MODE: Study Notes",
@@ -30,7 +39,7 @@ const SUMMARY_MODE_GUIDANCE: Record<SummaryFocusMode, string> = {
     technical: [
         "STYLE MODE: Technical & Code",
         "- Rigorous focus on system architecture, formal definitions, equations, algorithms, benchmarks, and trade-offs.",
-        "- Present algorithms, mathematical formulations, protocols, or pseudocode inside fenced code blocks with explicit language tags (e.g., ```python, ```rust, ```latex).",
+        `- ${FENCED_CODE_RULE}`,
     ].join("\n"),
 };
 
@@ -101,10 +110,10 @@ export function buildSummarySystemPrompt(
         SUMMARY_MODE_GUIDANCE[focusMode],
         "",
         "GLOBAL OUTPUT RULES:",
-        "- GROUNDING & CITATIONS: Anchor claims directly in the supplied source text and user annotations. Cite pages inline using bracketed format `[Page X]`.",
-        "- FIGURES: When figure crop URIs (`idb://crop-...`) are provided, embed relevant figures on their own line using `![Concise figure description (Page X)](idb://crop-...)`. Never invent or alter image URIs.",
+        `- GROUNDING & CITATIONS: Anchor claims directly in the supplied source text and user annotations. ${CITATION_FORMAT_RULE}`,
+        `- FIGURES: When figure crop URIs (\`idb://crop-...\`) are provided, ${FIGURE_SYNTAX_RULE}`,
         "- TOOL USAGE: If the user asks to include a figure from a page that does not yet have a crop URI, you may call `add_figure_to_summary`.",
-        "- OUTPUT FORMAT: Return clean, valid Markdown only—no conversational preamble or meta-commentary.",
+        `- OUTPUT FORMAT: ${MARKDOWN_ONLY_RULE}`,
     ].join("\n");
 }
 
@@ -159,7 +168,7 @@ export function buildStructuredSummarizationPrompt(
             ? `- FIGURE CROPS (IMAGES): ${hasAttachedImages
                 ? "Inspect the attached figure images carefully to describe their visual data, trends, axes, and diagrams accurately. "
                 : ""
-            }Embed the user's captured figure crops directly in the relevant sections on their own line using standard Markdown image syntax with the exact URI provided below, e.g., \`![Concise figure description (Page X)](idb://crop-...)\`. Never invent, modify, or shorten an image URI, and only reference URIs listed in USER FIGURE CROPS.`
+            }${FIGURE_SYNTAX_RULE} Only reference URIs listed in USER CAPTURED FIGURE CROPS.`
             : "- Do not invent or emit image links.";
 
     return [
@@ -168,12 +177,12 @@ export function buildStructuredSummarizationPrompt(
         STRUCTURED_FOCUS_OUTLINES[input.focusMode],
         "",
         "STRICT SYNTHESIS RULES:",
-        "- ANCHOR ON USER MARKUPS: Center the entire document around the user's selected highlights, underlines, and personal sticky notes below. Synthesize, connect, and contextualize what the user marked rather than producing generic filler.",
-        "- PAGE CITATIONS: Cite page numbers inline consistently using bracketed format `[Page X]` (e.g., `[Page 4]`).",
+        "- ANCHOR ON USER MARKUPS: Center the entire document around the user's selected highlights, underlines, and personal sticky notes below rather than producing generic filler.",
+        `- PAGE CITATIONS: ${CITATION_FORMAT_RULE}`,
         "- INTEGRATE CHAT INSIGHTS: Incorporate relevant answers or clarifications from the selected Lio Chat Takeaways naturally into the synthesis.",
-        "- FENCED CODE BLOCKS: Whenever explaining an algorithm, formula, protocol, pseudocode, or code structure, ALWAYS wrap it in a clean fenced code block with an explicit language tag (e.g., ```python, ```typescript, ```rust, ```latex, ```text).",
+        `- FENCED CODE BLOCKS: ${FENCED_CODE_RULE}`,
         figureRule,
-        "- OUTPUT FORMAT: Output valid Markdown only. Do not include conversational preamble or meta-commentary.",
+        `- OUTPUT FORMAT: ${MARKDOWN_ONLY_RULE}`,
         "",
         formatSummaryContextBlocks(input, { structuredPlaceholders: true }),
         input.fallbackExcerpt?.trim()

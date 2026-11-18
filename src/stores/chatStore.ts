@@ -2,12 +2,9 @@
  * Foliet - Persistent Chat & Streaming Store
  */
 
+import { produce } from "immer";
 import { create } from "zustand";
-import {
-    FOLIET_TOOL_DEFINITIONS,
-    LlmService,
-    type LlmToolCall,
-} from "@/services/llm";
+import { buildCopilotTools, LlmService } from "@/services/llm";
 import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
@@ -19,10 +16,8 @@ import type {
     CitationReference,
     ExecutedToolCall,
 } from "@/types/chat";
-import { executeCopilotToolCall } from "@/utils/chatTools";
 import {
     formatStreamErrorOutput,
-    formatToolResultsPrompt,
     formatUserPromptWithSelection,
 } from "@/utils/llmFormatting";
 import { readAnyRenderedPagesContext } from "@/utils/pdfDom";
@@ -63,20 +58,10 @@ async function resolveChatSystemPrompt(params: {
     useRag: boolean;
 }): Promise<{ systemPrompt: string; citations: CitationReference[] }> {
     const aiConfig = useAiConfigStore.getState();
-    const searchScope = useRagStore.getState().searchScope;
-    const targetDocId = searchScope === "current" ? params.activeDocId : undefined;
-
-    const toCitation = (
-        item: { chunkId: string; pageNumber: number; text: string },
-        docId: string,
-        docTitle: string,
-    ): CitationReference => ({
-        chunkId: item.chunkId,
-        docId,
-        docTitle,
-        pageNumber: item.pageNumber,
-        snippet: item.text.slice(0, 200),
-    });
+    const targetDocId =
+        useRagStore.getState().searchScope === "current"
+            ? params.activeDocId
+            : undefined;
 
     if (params.useRag) {
         try {
@@ -89,7 +74,6 @@ async function resolveChatSystemPrompt(params: {
                 },
                 aiConfig.getActiveEmbeddingConfig(),
             );
-
             if (ragResults.length > 0) {
                 return {
                     systemPrompt: LlmService.buildRagSystemPrompt(
@@ -97,9 +81,13 @@ async function resolveChatSystemPrompt(params: {
                         params.activeDocTitle,
                         true,
                     ),
-                    citations: ragResults.map((r) =>
-                        toCitation(r, r.docId, r.docTitle),
-                    ),
+                    citations: ragResults.map((r) => ({
+                        chunkId: r.chunkId,
+                        docId: r.docId,
+                        docTitle: r.docTitle,
+                        pageNumber: r.pageNumber,
+                        snippet: r.text.slice(0, 200),
+                    })),
                 };
             }
 
@@ -118,9 +106,13 @@ async function resolveChatSystemPrompt(params: {
                             params.activeDocTitle,
                             true,
                         ),
-                        citations: openingChunks.map((c) =>
-                            toCitation(c, params.activeDocId!, params.activeDocTitle),
-                        ),
+                        citations: openingChunks.map((c) => ({
+                            chunkId: c.chunkId,
+                            docId: params.activeDocId!,
+                            docTitle: params.activeDocTitle,
+                            pageNumber: c.pageNumber,
+                            snippet: c.text.slice(0, 200),
+                        })),
                     };
                 }
             }
@@ -231,11 +223,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         if (!text) return;
         if (get().isStreaming) get().cancelStreaming();
 
-        const state = get();
-        let conv = state.conversations.find((c) => c.id === state.activeConversationId);
+        let conv = get().conversations.find((c) => c.id === get().activeConversationId);
         if (!conv) {
-            const initialTitle = text.length > 36 ? `${text.slice(0, 36)}...` : text;
-            conv = await get().createConversation(initialTitle, options?.docId);
+            const title = text.length > 36 ? `${text.slice(0, 36)}...` : text;
+            conv = await get().createConversation(title, options?.docId);
         }
 
         const convId = conv.id;
@@ -252,18 +243,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             timestamp: Date.now(),
             citations: pendingSnippet ? [pendingSnippet] : undefined,
         };
-        set({ pendingContextSnippet: null });
 
-        const messagesWithUser = [...conv.messages, userMsg];
-        const convWithUser: ChatConversation = {
-            ...conv,
-            updatedAt: Date.now(),
-            messages: messagesWithUser,
-        };
-        set((s) => ({
-            conversations: s.conversations.map((c) => (c.id === convId ? convWithUser : c)),
-        }));
-        await DocumentDatabase.saveConversation(convWithUser);
+        set((s) =>
+            produce(s, (draft) => {
+                draft.pendingContextSnippet = null;
+                const target = draft.conversations.find((c) => c.id === convId);
+                if (target) {
+                    target.updatedAt = Date.now();
+                    target.messages.push(userMsg);
+                }
+            }),
+        );
+        const convAfterUser = get().conversations.find((c) => c.id === convId);
+        if (convAfterUser) await DocumentDatabase.saveConversation(convAfterUser);
 
         const { systemPrompt, citations } = await resolveChatSystemPrompt({
             query: text,
@@ -274,146 +266,82 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         });
 
         const assistantId = crypto.randomUUID();
-        const convWithAssistant: ChatConversation = {
-            ...convWithUser,
-            updatedAt: Date.now(),
-            messages: [
-                ...messagesWithUser,
-                {
-                    id: assistantId,
-                    role: "assistant",
-                    content: "",
-                    timestamp: Date.now(),
-                    citations: citations.length > 0 ? citations : undefined,
-                    isStreaming: true,
-                },
-            ],
-        };
-
         const abortController = new AbortController();
         activeAbortController = abortController;
 
-        set((s) => ({
-            isStreaming: true,
-            conversations: s.conversations.map((c) =>
-                c.id === convId ? convWithAssistant : c,
-            ),
-        }));
+        set((s) =>
+            produce(s, (draft) => {
+                draft.isStreaming = true;
+                const target = draft.conversations.find((c) => c.id === convId);
+                if (target) {
+                    target.updatedAt = Date.now();
+                    target.messages.push({
+                        id: assistantId,
+                        role: "assistant",
+                        content: "",
+                        timestamp: Date.now(),
+                        citations: citations.length > 0 ? citations : undefined,
+                        isStreaming: true,
+                    });
+                }
+            }),
+        );
 
         let accumulatedText = "";
         const allExecutedTools: ExecutedToolCall[] = [];
 
-        const patchAssistant = (patch: Partial<ChatMessage>) => {
-            set((s) => ({
-                conversations: s.conversations.map((c) =>
-                    c.id === convId
-                        ? {
-                            ...c,
-                            messages: c.messages.map((m) =>
-                                m.id === assistantId ? { ...m, ...patch } : m,
-                            ),
-                        }
-                        : c,
-                ),
-            }));
+        const patchAssistant = (patch: Partial<ChatMessage>, isFinal = false) => {
+            set((s) =>
+                produce(s, (draft) => {
+                    if (isFinal) draft.isStreaming = false;
+                    const target = draft.conversations.find((c) => c.id === convId);
+                    const msg = target?.messages.find((m) => m.id === assistantId);
+                    if (target && msg) {
+                        if (isFinal) target.updatedAt = Date.now();
+                        Object.assign(msg, patch);
+                    }
+                }),
+            );
         };
 
         const finalizeMessage = async (finalContent: string) => {
-            const finalConv: ChatConversation = {
-                ...convWithAssistant,
-                updatedAt: Date.now(),
-                messages: convWithAssistant.messages.map((m) =>
-                    m.id === assistantId
-                        ? {
-                            ...m,
-                            isStreaming: false,
-                            content: finalContent,
-                            toolCalls:
-                                allExecutedTools.length > 0 ? allExecutedTools : undefined,
-                        }
-                        : m,
-                ),
-            };
-            set((s) => ({
-                isStreaming: false,
-                conversations: s.conversations.map((c) => (c.id === convId ? finalConv : c)),
-            }));
-            await DocumentDatabase.saveConversation(finalConv);
+            patchAssistant(
+                {
+                    isStreaming: false,
+                    content: finalContent,
+                    toolCalls:
+                        allExecutedTools.length > 0 ? [...allExecutedTools] : undefined,
+                },
+                true,
+            );
+            const finalConv = get().conversations.find((c) => c.id === convId);
+            if (finalConv) await DocumentDatabase.saveConversation(finalConv);
         };
 
         try {
             const aiConfig = useAiConfigStore.getState();
-            const llmOpts = aiConfig.getActiveLlmConfig();
-            let conversationMessages = messagesWithUser;
-            const maxToolRounds = 3;
+            const historyBeforeAssistant =
+                convAfterUser?.messages ?? [...conv.messages, userMsg];
 
-            for (let round = 0; round < maxToolRounds; round++) {
-                let pendingToolCalls: LlmToolCall[] = [];
-                let roundText = "";
-                const isLastRound = round + 1 >= maxToolRounds;
-
-                await LlmService.streamChat({
-                    messages: conversationMessages,
-                    systemPrompt: systemPrompt || undefined,
-                    ...llmOpts,
-                    webSearchEnabled: aiConfig.webSearchEnabled,
-                    tools: isLastRound ? undefined : FOLIET_TOOL_DEFINITIONS,
-                    signal: abortController.signal,
-                    onToolCalls: (calls) => {
-                        pendingToolCalls = calls;
+            await LlmService.streamChat({
+                messages: historyBeforeAssistant,
+                systemPrompt: systemPrompt || undefined,
+                ...aiConfig.getActiveLlmConfig(),
+                webSearchEnabled: aiConfig.webSearchEnabled,
+                tools: buildCopilotTools(
+                    { docId: activeDocId, docTitle: activeDocTitle, jumpToPage },
+                    (executed) => {
+                        allExecutedTools.push(executed);
+                        patchAssistant({ toolCalls: [...allExecutedTools] });
                     },
-                    onChunk: (chunk) => {
-                        roundText += chunk;
-                        accumulatedText += chunk;
-                        patchAssistant({ content: accumulatedText });
-                    },
-                });
-
-                if (pendingToolCalls.length === 0 || abortController.signal.aborted) break;
-
-                const roundExecuted: ExecutedToolCall[] = [];
-                for (const tc of pendingToolCalls) {
-                    const execRes = await executeCopilotToolCall(tc, {
-                        docId: activeDocId,
-                        docTitle: activeDocTitle,
-                        jumpToPage,
-                    });
-                    roundExecuted.push(execRes);
-                    allExecutedTools.push(execRes);
-                }
-
-                patchAssistant({ toolCalls: [...allExecutedTools] });
-
-                const needsFollowUp =
-                    accumulatedText.trim().length === 0 ||
-                    roundExecuted.some(
-                        (t) => t.name === "navigate_to" || t.name === "explain_figure",
-                    );
-                if (!needsFollowUp || isLastRound) break;
-
-                conversationMessages = [
-                    ...conversationMessages,
-                    ...(roundText.trim()
-                        ? [
-                            {
-                                id: crypto.randomUUID(),
-                                role: "assistant" as const,
-                                content: roundText,
-                                timestamp: Date.now(),
-                            },
-                        ]
-                        : []),
-                    {
-                        id: crypto.randomUUID(),
-                        role: "user",
-                        content: formatToolResultsPrompt(
-                            roundExecuted.map((t) => `Tool: ${t.name}\nOutcome: ${t.result}`),
-                            "Now answer the user's question directly in clear scholarly prose using the retrieved page content above. Do NOT print `[Executed Tools]` or raw JSON tool calls.",
-                        ),
-                        timestamp: Date.now(),
-                    },
-                ];
-            }
+                ),
+                maxSteps: 3,
+                signal: abortController.signal,
+                onChunk: (chunk) => {
+                    accumulatedText += chunk;
+                    patchAssistant({ content: accumulatedText });
+                },
+            });
 
             await finalizeMessage(accumulatedText);
         } catch (err) {
@@ -428,10 +356,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     },
 
     cancelStreaming: () => {
-        if (activeAbortController) {
-            activeAbortController.abort();
-            activeAbortController = null;
-        }
+        activeAbortController?.abort();
+        activeAbortController = null;
         set({ isStreaming: false });
     },
 }));

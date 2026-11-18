@@ -2,11 +2,11 @@
  * Foliet - Document Summarization Store
  */
 
+import type { ToolSet } from "ai";
 import { create } from "zustand";
 import {
-    FOLIET_TOOL_DEFINITIONS,
+    buildSummaryTools,
     LlmService,
-    type LlmToolCall,
     type StructuredSummaryInput,
     type SummaryFocusMode,
     type VisionImageInput,
@@ -14,15 +14,14 @@ import {
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
 import type { PdfAnnotation } from "@/types/annotations";
-import type { ChatConversation, ChatMessage } from "@/types/chat";
+import type { ChatConversation } from "@/types/chat";
 import type { PdfChapter } from "@/types/document";
 import { isAbortError } from "@/utils/error";
-import { formatToolResultsPrompt } from "@/utils/llmFormatting";
 import {
     type AiSummaryState,
     collectRangeContext,
-    executeSummaryToolCalls,
     fetchRangeText,
+    prepareChapterPromptData,
     readPreviousSummaryBackup,
     resolveCropsForVision,
     resolvePreviousSnapshot,
@@ -112,115 +111,101 @@ let activeSummaryAbortController: AbortController | null = null;
 let activePdfProxy: any | null = null;
 let latestLoadToken = 0;
 
-function beginAbortController(): AbortController {
-    activeSummaryAbortController?.abort();
-    const controller = new AbortController();
-    activeSummaryAbortController = controller;
-    return controller;
-}
-
-function clearAbortController(controller: AbortController): void {
-    if (activeSummaryAbortController === controller) {
-        activeSummaryAbortController = null;
-    }
-}
-
-async function prepareChapterPromptData(params: {
-    docId: string;
-    docTitle: string;
-    chapter: PdfChapter;
-    focusMode: SummaryFocusMode;
-    annotations: PdfAnnotation[];
-    conversations: ChatConversation[];
-    includeNotes: boolean;
-    includeChats: boolean;
-}) {
-    const chapterText = await fetchRangeText(
-        params.docId,
-        activePdfProxy,
-        params.chapter.startPage,
-        params.chapter.endPage,
-    );
-    const ctx = collectRangeContext(params.annotations, params.conversations, {
-        startPage: params.chapter.startPage,
-        endPage: params.chapter.endPage,
-        includeNotes: params.includeNotes,
-        includeChats: params.includeChats,
-    });
-    const { enrichedCrops, visionImages } = await resolveCropsForVision(ctx.crops);
-    const prompt = LlmService.buildChapterSummaryPrompt({
-        docTitle: params.docTitle,
-        chapterTitle: params.chapter.title,
-        startPage: params.chapter.startPage,
-        endPage: params.chapter.endPage,
-        focusMode: params.focusMode,
-        chapterText,
-        highlights: ctx.highlights,
-        notes: ctx.notes,
-        crops: enrichedCrops,
-        chatTakeaways: ctx.chatTakeaways,
-    });
-    return { prompt, visionImages };
-}
-
 export const useSummaryStore = create<SummaryStore>((set, get) => {
-    const captureBackup = async (docId: string) => {
+    const captureBackup = async (docId: string, override?: AiSummaryState | null) => {
+        if (override?.content?.trim()) {
+            writePreviousSummaryBackup(docId, override);
+            set({ previousSummary: override });
+            return;
+        }
         const snapshot = await resolvePreviousSnapshot(docId, get().activeSummary);
         if (snapshot) set({ previousSummary: snapshot });
     };
 
-    const runSummaryTask = async (
-        task: (signal: AbortSignal) => Promise<void>,
-        onAbort?: () => Promise<void> | void,
+    const persistSummary = async (
+        docId: string,
+        content: string,
+        sourceSnapshot?: string,
     ) => {
-        const controller = beginAbortController();
+        await DocumentDatabase.saveSummary(docId, content, sourceSnapshot);
+        set({ activeSummary: { content, sourceSnapshot, updatedAt: Date.now() } });
+    };
+
+    const runStreamedSummaryPipeline = async (opts: {
+        docId: string;
+        backupOverride?: AiSummaryState | null;
+        getPartialContent?: () => { content: string; sourceSnapshot?: string } | null;
+        run: (ctx: {
+            signal: AbortSignal;
+            streamPrompt: (params: {
+                prompt: string;
+                systemPrompt?: string;
+                webSearchEnabled?: boolean;
+                visionImages?: VisionImageInput[];
+                tools?: ToolSet;
+                maxSteps?: number;
+                onChunk: (chunk: string) => void;
+            }) => Promise<string>;
+        }) => Promise<void>;
+    }) => {
+        await captureBackup(opts.docId, opts.backupOverride);
+        activeSummaryAbortController?.abort();
+        const controller = new AbortController();
+        activeSummaryAbortController = controller;
         set({ isSummarizing: true });
+
+        const streamPrompt = (params: {
+            prompt: string;
+            systemPrompt?: string;
+            webSearchEnabled?: boolean;
+            visionImages?: VisionImageInput[];
+            tools?: ToolSet;
+            maxSteps?: number;
+            onChunk: (chunk: string) => void;
+        }) => {
+            const llm = useAiConfigStore.getState().getActiveLlmConfig();
+            return LlmService.streamChat({
+                messages: [
+                    {
+                        id: crypto.randomUUID(),
+                        role: "user",
+                        content: params.prompt,
+                        timestamp: Date.now(),
+                    },
+                ],
+                systemPrompt: params.systemPrompt,
+                webSearchEnabled:
+                    llm.provider === "openrouter" && Boolean(params.webSearchEnabled),
+                visionImages: params.visionImages?.length ? params.visionImages : undefined,
+                tools: params.tools,
+                maxSteps: params.maxSteps,
+                ...llm,
+                signal: controller.signal,
+                onChunk: params.onChunk,
+            });
+        };
+
         try {
-            await task(controller.signal);
+            await opts.run({ signal: controller.signal, streamPrompt });
         } catch (err) {
             if (isAbortError(err, controller.signal)) {
-                await onAbort?.();
+                const partial = opts.getPartialContent?.();
+                if (partial?.content.trim()) {
+                    await persistSummary(
+                        opts.docId,
+                        partial.content,
+                        partial.sourceSnapshot,
+                    ).catch(() => { });
+                }
                 return;
             }
             throw err;
         } finally {
             set({ isSummarizing: false, generationProgress: null });
-            clearAbortController(controller);
+            if (activeSummaryAbortController === controller) {
+                activeSummaryAbortController = null;
+            }
         }
-    };
-
-    const streamPrompt = async (params: {
-        prompt?: string;
-        messages?: ChatMessage[];
-        systemPrompt?: string;
-        webSearchEnabled?: boolean;
-        visionImages?: VisionImageInput[];
-        tools?: typeof FOLIET_TOOL_DEFINITIONS;
-        signal: AbortSignal;
-        onChunk: (chunk: string) => void;
-        onToolCalls?: (calls: LlmToolCall[]) => void;
-    }) => {
-        const llm = useAiConfigStore.getState().getActiveLlmConfig();
-        const messages: ChatMessage[] = params.messages ?? [
-            {
-                id: crypto.randomUUID(),
-                role: "user",
-                content: params.prompt ?? "",
-                timestamp: Date.now(),
-            },
-        ];
-        await LlmService.streamChat({
-            messages,
-            systemPrompt: params.systemPrompt,
-            webSearchEnabled:
-                llm.provider === "openrouter" && Boolean(params.webSearchEnabled),
-            visionImages: params.visionImages?.length ? params.visionImages : undefined,
-            tools: params.tools,
-            ...llm,
-            signal: params.signal,
-            onChunk: params.onChunk,
-            onToolCalls: params.onToolCalls,
-        });
     };
 
     return {
@@ -309,12 +294,8 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
         },
 
         generateStructuredSummary: async (docId, input) => {
-            await captureBackup(docId);
             const { enrichedCrops, visionImages } = await resolveCropsForVision(input.crops);
-            const enrichedInput: StructuredSummaryInput = {
-                ...input,
-                crops: enrichedCrops,
-            };
+            const enrichedInput: StructuredSummaryInput = { ...input, crops: enrichedCrops };
             const sourceSnapshot = JSON.stringify({
                 focusMode: enrichedInput.focusMode,
                 highlights: enrichedInput.highlights.length,
@@ -322,25 +303,16 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 crops: enrichedInput.crops.length,
                 chats: enrichedInput.chatTakeaways.length,
             });
-
             let accumulated = "";
-            const saveSnapshot = async () => {
-                await DocumentDatabase.saveSummary(docId, accumulated, sourceSnapshot);
-                set({
-                    activeSummary: {
-                        content: accumulated,
-                        sourceSnapshot,
-                        updatedAt: Date.now(),
-                    },
-                });
-            };
 
-            await runSummaryTask(
-                async (signal) => {
+            await runStreamedSummaryPipeline({
+                docId,
+                getPartialContent: () =>
+                    accumulated.trim() ? { content: accumulated, sourceSnapshot } : null,
+                run: async ({ streamPrompt }) => {
                     await streamPrompt({
                         prompt: LlmService.buildStructuredSummarizationPrompt(enrichedInput),
                         visionImages,
-                        signal,
                         onChunk: (chunk) => {
                             accumulated += chunk;
                             set({
@@ -352,14 +324,9 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             });
                         },
                     });
-                    await saveSnapshot();
+                    await persistSummary(docId, accumulated, sourceSnapshot);
                 },
-                async () => {
-                    if (accumulated.trim()) {
-                        await saveSnapshot().catch(() => { });
-                    }
-                },
-            );
+            });
         },
 
         generateChapterSummary: async (
@@ -374,13 +341,17 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 webSearchEnabled = false,
             },
         ) => {
-            await captureBackup(docId);
             const { summaryFocusMode, activeSummary } = get();
             const baseMarkdown = activeSummary?.content ?? "";
             let streamedChapter = "";
+            const buildMerged = () =>
+                upsertChapterSection(baseMarkdown, docTitle, chapter.title, streamedChapter);
 
-            await runSummaryTask(
-                async (signal) => {
+            await runStreamedSummaryPipeline({
+                docId,
+                getPartialContent: () =>
+                    streamedChapter.trim() ? { content: buildMerged() } : null,
+                run: async ({ streamPrompt }) => {
                     set({
                         generationProgress: { current: 1, total: 1, chapterTitle: chapter.title },
                     });
@@ -388,13 +359,13 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         docId,
                         docTitle,
                         chapter,
+                        pdfProxy: activePdfProxy,
                         focusMode: summaryFocusMode,
                         annotations,
                         conversations,
                         includeNotes,
                         includeChats,
                     });
-
                     await streamPrompt({
                         prompt,
                         systemPrompt: LlmService.buildSummarySystemPrompt(
@@ -403,46 +374,16 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         ),
                         webSearchEnabled,
                         visionImages,
-                        signal,
                         onChunk: (chunk) => {
                             streamedChapter += chunk;
                             set({
-                                activeSummary: {
-                                    content: upsertChapterSection(
-                                        baseMarkdown,
-                                        docTitle,
-                                        chapter.title,
-                                        streamedChapter,
-                                    ),
-                                    updatedAt: Date.now(),
-                                },
+                                activeSummary: { content: buildMerged(), updatedAt: Date.now() },
                             });
                         },
                     });
-
-                    const finalContent = upsertChapterSection(
-                        baseMarkdown,
-                        docTitle,
-                        chapter.title,
-                        streamedChapter,
-                    );
-                    await DocumentDatabase.saveSummary(docId, finalContent);
-                    set({
-                        activeSummary: { content: finalContent, updatedAt: Date.now() },
-                    });
+                    await persistSummary(docId, buildMerged());
                 },
-                async () => {
-                    if (!streamedChapter.trim()) return;
-                    const partial = upsertChapterSection(
-                        baseMarkdown,
-                        docTitle,
-                        chapter.title,
-                        streamedChapter,
-                    );
-                    await DocumentDatabase.saveSummary(docId, partial).catch(() => { });
-                    set({ activeSummary: { content: partial, updatedAt: Date.now() } });
-                },
-            );
+            });
         },
 
         generateFullBookSummary: async (
@@ -459,7 +400,6 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
         ) => {
             if (chapters.length === 0) return;
 
-            await captureBackup(docId);
             const { summaryFocusMode } = get();
             const systemPrompt = LlmService.buildSummarySystemPrompt(
                 summaryFocusMode,
@@ -467,8 +407,13 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
             );
             let runningMarkdown = `# ${docTitle}\n`;
 
-            await runSummaryTask(
-                async (signal) => {
+            await runStreamedSummaryPipeline({
+                docId,
+                getPartialContent: () =>
+                    runningMarkdown.trim().length > docTitle.length + 4
+                        ? { content: runningMarkdown }
+                        : null,
+                run: async ({ signal, streamPrompt }) => {
                     set({
                         activeSummary: { content: runningMarkdown, updatedAt: Date.now() },
                         generationProgress: {
@@ -488,11 +433,11 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                                 chapterTitle: chapter.title,
                             },
                         });
-
                         const { prompt, visionImages } = await prepareChapterPromptData({
                             docId,
                             docTitle,
                             chapter,
+                            pdfProxy: activePdfProxy,
                             focusMode: summaryFocusMode,
                             annotations,
                             conversations,
@@ -506,7 +451,6 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             systemPrompt,
                             webSearchEnabled,
                             visionImages,
-                            signal,
                             onChunk: (chunk) => {
                                 chapterOutput += chunk;
                                 set({
@@ -529,23 +473,10 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             chapter.title,
                             chapterOutput,
                         );
-                        await DocumentDatabase.saveSummary(docId, runningMarkdown);
-                        set({
-                            activeSummary: {
-                                content: runningMarkdown,
-                                updatedAt: Date.now(),
-                            },
-                        });
+                        await persistSummary(docId, runningMarkdown);
                     }
                 },
-                async () => {
-                    if (runningMarkdown.trim().length > docTitle.length + 4) {
-                        await DocumentDatabase.saveSummary(docId, runningMarkdown).catch(
-                            () => { },
-                        );
-                    }
-                },
-            );
+            });
         },
 
         modifySummaryWithInstruction: async (
@@ -563,23 +494,22 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 webSearchEnabled = false,
             },
         ) => {
-            if (existingMarkdown.trim()) {
-                const snapshot: AiSummaryState = {
-                    content: existingMarkdown,
-                    sourceSnapshot: get().activeSummary?.sourceSnapshot,
-                    updatedAt: get().activeSummary?.updatedAt || Date.now(),
-                };
-                writePreviousSummaryBackup(docId, snapshot);
-                set({ previousSummary: snapshot });
-            } else {
-                await captureBackup(docId);
-            }
-
             const { summaryFocusMode } = get();
             let accumulated = "";
+            let resetOnNextChunk = false;
 
-            await runSummaryTask(
-                async (signal) => {
+            await runStreamedSummaryPipeline({
+                docId,
+                backupOverride: existingMarkdown.trim()
+                    ? {
+                        content: existingMarkdown,
+                        sourceSnapshot: get().activeSummary?.sourceSnapshot,
+                        updatedAt: get().activeSummary?.updatedAt || Date.now(),
+                    }
+                    : null,
+                getPartialContent: () =>
+                    accumulated.trim() ? { content: accumulated } : null,
+                run: async ({ streamPrompt }) => {
                     const ctx = collectRangeContext(annotations, conversations, {
                         startPage: activeChapter?.startPage,
                         endPage: activeChapter?.endPage,
@@ -603,108 +533,48 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         }
                         : undefined;
 
-                    const systemPrompt = LlmService.buildSummarySystemPrompt(
-                        summaryFocusMode,
-                        docTitle,
-                    );
-                    const basePrompt = LlmService.buildModifySummaryPrompt({
-                        docTitle,
-                        focusMode: summaryFocusMode,
-                        existingMarkdown,
-                        instruction,
-                        chapterContext,
-                        highlights: ctx.highlights,
-                        notes: ctx.notes,
-                        crops: enrichedCrops,
-                        chatTakeaways: ctx.chatTakeaways,
-                    });
-
-                    const summaryTools = FOLIET_TOOL_DEFINITIONS.filter(
-                        (t) =>
-                            t.name === "add_figure_to_summary" || t.name === "navigate_to",
-                    );
-
-                    let pendingToolCalls: LlmToolCall[] = [];
                     await streamPrompt({
-                        prompt: basePrompt,
-                        systemPrompt,
+                        prompt: LlmService.buildModifySummaryPrompt({
+                            docTitle,
+                            focusMode: summaryFocusMode,
+                            existingMarkdown,
+                            instruction,
+                            chapterContext,
+                            highlights: ctx.highlights,
+                            notes: ctx.notes,
+                            crops: enrichedCrops,
+                            chatTakeaways: ctx.chatTakeaways,
+                        }),
+                        systemPrompt: LlmService.buildSummarySystemPrompt(
+                            summaryFocusMode,
+                            docTitle,
+                        ),
                         webSearchEnabled,
                         visionImages,
-                        tools: summaryTools,
-                        signal,
-                        onToolCalls: (calls) => {
-                            pendingToolCalls = calls;
-                        },
+                        tools: buildSummaryTools({
+                            docId,
+                            pdfProxy: activePdfProxy,
+                            jumpToPage,
+                            onToolExecuted: () => {
+                                resetOnNextChunk = true;
+                            },
+                        }),
+                        maxSteps: 3,
                         onChunk: (chunk) => {
-                            accumulated += chunk;
+                            accumulated = resetOnNextChunk
+                                ? ((resetOnNextChunk = false), chunk)
+                                : accumulated + chunk;
                             set({
                                 activeSummary: { content: accumulated, updatedAt: Date.now() },
                             });
                         },
                     });
 
-                    if (pendingToolCalls.length > 0 && !signal.aborted) {
-                        const { toolResults, extraVision } = await executeSummaryToolCalls(
-                            pendingToolCalls,
-                            {
-                                docId,
-                                pdfProxy: activePdfProxy,
-                                initialVision: visionImages,
-                                jumpToPage,
-                            },
-                        );
-                        if (toolResults.length > 0) {
-                            accumulated = "";
-                            await streamPrompt({
-                                messages: [
-                                    {
-                                        id: crypto.randomUUID(),
-                                        role: "user",
-                                        content: basePrompt,
-                                        timestamp: Date.now(),
-                                    },
-                                    {
-                                        id: crypto.randomUUID(),
-                                        role: "user",
-                                        content: formatToolResultsPrompt(
-                                            toolResults,
-                                            "Now output the complete updated summary Markdown incorporating the tool results above.",
-                                        ),
-                                        timestamp: Date.now(),
-                                    },
-                                ],
-                                systemPrompt,
-                                webSearchEnabled,
-                                visionImages: extraVision,
-                                signal,
-                                onChunk: (chunk) => {
-                                    accumulated += chunk;
-                                    set({
-                                        activeSummary: {
-                                            content: accumulated,
-                                            updatedAt: Date.now(),
-                                        },
-                                    });
-                                },
-                            });
-                        }
-                    }
-
                     if (accumulated.trim()) {
-                        await DocumentDatabase.saveSummary(docId, accumulated);
-                        set({
-                            activeSummary: { content: accumulated, updatedAt: Date.now() },
-                        });
+                        await persistSummary(docId, accumulated);
                     }
                 },
-                async () => {
-                    if (!accumulated.trim()) return;
-                    await DocumentDatabase.saveSummary(docId, accumulated).catch(() => { });
-                    set({
-                        activeSummary: { content: accumulated, updatedAt: Date.now() },
-                    });
-                },
-            );
+            });
         },
 
         cancelSummaryStreaming: () => {

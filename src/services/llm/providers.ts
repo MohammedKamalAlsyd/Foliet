@@ -1,24 +1,21 @@
 /**
- * Foliet - Multi-Provider Streaming Adapters
+ * Foliet - Multi-Provider Vercel AI SDK Streaming Adapters
  */
 
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import {
+    APICallError,
+    stepCountIs,
+    streamText,
+    type ModelMessage,
+} from "ai";
 import type { LlmProvider } from "@/types/chat";
-import {
-    formatMessageTextWithTools,
-    splitDataUrl,
-} from "@/utils/llmFormatting";
-import {
-    fetchWithToolFallback,
-    parseErrorResponse,
-    streamNdjson,
-    streamSse,
-} from "./stream";
-import { parseToolArgs, toOpenAiTools } from "./tools";
-import type {
-    LlmToolCall,
-    StreamChatOptions,
-    VisionImageInput,
-} from "./types";
+import { extractErrorMessage, isAbortError } from "@/utils/error";
+import { splitDataUrl } from "@/utils/llmFormatting";
+import type { StreamChatOptions, VisionImageInput } from "./types";
 
 export const PROVIDER_NAMES: Record<LlmProvider, string> = {
     openrouter: "OpenRouter",
@@ -70,440 +67,143 @@ export function isVisionCapableModel(
     return false;
 }
 
-function getLastUserIndex(messages: Array<{ role: string }>): number {
-    return messages.reduce((acc, m, idx) => (m.role === "user" ? idx : acc), -1);
-}
-
-function resolveVisionImages(
-    provider: LlmProvider,
-    model: string,
-    options: StreamChatOptions,
-): VisionImageInput[] | null {
-    if (!options.visionImages?.length || !isVisionCapableModel(provider, model)) {
-        return null;
-    }
-    return options.visionImages;
-}
-
-function emitOrderedToolCalls(
-    accum: Map<number, { id: string; name: string; argsJson: string }>,
-    onToolCalls?: (calls: LlmToolCall[]) => void,
-): void {
-    if (accum.size === 0 || !onToolCalls) return;
-    const calls = Array.from(accum.entries())
-        .sort((a, b) => a[0] - b[0])
-        .filter(([, entry]) => entry.name.trim().length > 0)
-        .map(([, entry]) => ({
-            id: entry.id,
-            name: entry.name.trim(),
-            arguments: parseToolArgs(entry.argsJson),
-        }));
-    if (calls.length > 0) onToolCalls(calls);
-}
-
-// =============================================================================
-// OpenAI & OpenRouter (Shared OpenAI-Compatible Adapter)
-// =============================================================================
-
-async function streamOpenAiCompatible(
-    config: {
-        provider: "openrouter" | "openai";
-        url: string;
-        extraHeaders?: Record<string, string>;
-        allowWebSearch?: boolean;
-    },
-    model: string,
-    apiKey: string,
-    options: StreamChatOptions,
-): Promise<string> {
-    const vision = resolveVisionImages(config.provider, model, options);
-    const lastUserIdx = getLastUserIndex(options.messages);
-
-    const messages: Array<{ role: string; content: any }> = [];
-    if (options.systemPrompt?.trim()) {
-        messages.push({ role: "system", content: options.systemPrompt.trim() });
-    }
-
-    options.messages.forEach((msg, idx) => {
-        const text = formatMessageTextWithTools(msg);
-        if (vision && idx === lastUserIdx) {
-            const parts: any[] = [{ type: "text", text }];
-            for (const img of vision) {
-                if (img.caption) {
-                    parts.push({
-                        type: "text",
-                        text: `[Figure Reference: ${img.caption}]`,
-                    });
-                }
-                parts.push({ type: "image_url", image_url: { url: img.dataUrl } });
-            }
-            messages.push({ role: msg.role, content: parts });
-        } else {
-            messages.push({ role: msg.role, content: text });
-        }
-    });
-
-    const openAiTools = toOpenAiTools(options.tools);
-    const sendReq = (includeTools: boolean) => {
-        const payload: Record<string, any> = { model, messages, stream: true };
-        if (config.allowWebSearch && options.webSearchEnabled) {
-            payload.plugins = [{ id: "web" }];
-        }
-        if (includeTools && openAiTools) {
-            payload.tools = openAiTools;
-            payload.tool_choice = "auto";
-        }
-        return fetch(config.url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey.trim()}`,
-                ...config.extraHeaders,
-            },
-            body: JSON.stringify(payload),
-            signal: options.signal,
-        });
-    };
-
-    const response = await fetchWithToolFallback(
-        sendReq,
-        Boolean(openAiTools),
-        PROVIDER_NAMES[config.provider],
-    );
-
-    let fullText = "";
-    const toolCallAccum = new Map<
-        number,
-        { id: string; name: string; argsJson: string }
-    >();
-
-    await streamSse(response, options.signal, (data) => {
-        if (data === "[DONE]") return;
+const openRouterWebSearchFetch: typeof fetch = async (input, init) => {
+    if (typeof init?.body === "string") {
         try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta;
-            if (typeof delta?.content === "string" && delta.content) {
-                fullText += delta.content;
-                options.onChunk(delta.content);
-            }
-            if (Array.isArray(delta?.tool_calls)) {
-                for (const tc of delta.tool_calls) {
-                    const idx = typeof tc.index === "number" ? tc.index : 0;
-                    const entry = toolCallAccum.get(idx) ?? {
-                        id: tc.id || crypto.randomUUID(),
-                        name: "",
-                        argsJson: "",
-                    };
-                    if (tc.id) entry.id = tc.id;
-                    if (tc.function?.name) entry.name += tc.function.name;
-                    if (typeof tc.function?.arguments === "string") {
-                        entry.argsJson += tc.function.arguments;
-                    }
-                    toolCallAccum.set(idx, entry);
-                }
-            }
+            const parsed = JSON.parse(init.body);
+            parsed.plugins = [{ id: "web" }];
+            return fetch(input, { ...init, body: JSON.stringify(parsed) });
         } catch {
-            // Ignore malformed or incomplete frames
+            // Fall through with original body
         }
-    });
+    }
+    return fetch(input, init);
+};
 
-    emitOrderedToolCalls(toolCallAccum, options.onToolCalls);
-    return fullText;
+function normalizeOllamaBase(endpoint: string): string {
+    return endpoint.replace(/\/+$/, "").replace(/\/v1$/, "");
 }
 
-// =============================================================================
-// Anthropic
-// =============================================================================
-
-async function streamAnthropic(
-    model: string,
-    apiKey: string,
-    options: StreamChatOptions,
-): Promise<string> {
-    const filtered = options.messages.filter(
-        (m) => m.role === "user" || m.role === "assistant",
-    );
-    const vision = resolveVisionImages("anthropic", model, options);
-    const lastUserIdx = getLastUserIndex(filtered);
-
-    const messages = filtered.map((m, idx) => {
-        const text = formatMessageTextWithTools(m);
-        if (!vision || idx !== lastUserIdx) return { role: m.role, content: text };
-
-        const blocks: any[] = [{ type: "text", text }];
-        for (const img of vision) {
-            const split = splitDataUrl(img.dataUrl);
-            if (!split) continue;
-            if (img.caption) {
-                blocks.push({ type: "text", text: `[Figure Reference: ${img.caption}]` });
-            }
-            blocks.push({
-                type: "image",
-                source: { type: "base64", media_type: split.mimeType, data: split.base64 },
-            });
-        }
-        return { role: m.role, content: blocks };
-    });
-
-    const payload: Record<string, any> = {
-        model,
-        max_tokens: 4096,
-        messages,
-        stream: true,
-    };
-    if (options.systemPrompt?.trim()) payload.system = options.systemPrompt.trim();
-    if (options.tools?.length) {
-        payload.tools = options.tools.map((t) => ({
-            name: t.name,
-            description: t.description,
-            input_schema: t.parameters,
-        }));
-    }
-
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "x-api-key": apiKey.trim(),
-            "anthropic-version": "2023-06-01",
-            "anthropic-dangerous-direct-browser-access": "true",
-        },
-        body: JSON.stringify(payload),
-        signal: options.signal,
-    });
-
-    if (!response.ok) {
-        throw new Error(await parseErrorResponse(response, "Anthropic"));
-    }
-
-    let fullText = "";
-    const toolBlocks = new Map<
-        number,
-        { id: string; name: string; argsJson: string }
-    >();
-
-    await streamSse(response, options.signal, (data) => {
+function createOllamaFetch(endpoint: string): typeof fetch {
+    const baseUrl = normalizeOllamaBase(endpoint);
+    return async (input, init) => {
         try {
-            const parsed = JSON.parse(data);
-            if (
-                parsed.type === "content_block_start" &&
-                parsed.content_block?.type === "tool_use"
-            ) {
-                const idx = typeof parsed.index === "number" ? parsed.index : 0;
-                toolBlocks.set(idx, {
-                    id: parsed.content_block.id || crypto.randomUUID(),
-                    name: parsed.content_block.name || "",
-                    argsJson: "",
-                });
-            } else if (parsed.type === "content_block_delta") {
-                if (
-                    parsed.delta?.type === "text_delta" &&
-                    typeof parsed.delta.text === "string"
-                ) {
-                    fullText += parsed.delta.text;
-                    options.onChunk(parsed.delta.text);
-                } else if (
-                    parsed.delta?.type === "input_json_delta" &&
-                    typeof parsed.delta.partial_json === "string"
-                ) {
-                    const idx = typeof parsed.index === "number" ? parsed.index : 0;
-                    const entry = toolBlocks.get(idx);
-                    if (entry) entry.argsJson += parsed.delta.partial_json;
-                }
-            }
-        } catch {
-            // Ignore non-JSON frames
-        }
-    });
-
-    emitOrderedToolCalls(toolBlocks, options.onToolCalls);
-    return fullText;
-}
-
-// =============================================================================
-// Google AI Studio (Gemini)
-// =============================================================================
-
-async function streamGoogleAiStudio(
-    model: string,
-    apiKey: string,
-    options: StreamChatOptions,
-): Promise<string> {
-    const filtered = options.messages.filter(
-        (m) => m.role === "user" || m.role === "assistant",
-    );
-    const vision = resolveVisionImages("google-ai-studio", model, options);
-    const lastUserIdx = getLastUserIndex(filtered);
-
-    const contents = filtered.map((m, idx) => {
-        const parts: any[] = [{ text: formatMessageTextWithTools(m) }];
-        if (vision && idx === lastUserIdx) {
-            for (const img of vision) {
-                const split = splitDataUrl(img.dataUrl);
-                if (!split) continue;
-                if (img.caption) {
-                    parts.push({ text: `[Figure Reference: ${img.caption}]` });
-                }
-                parts.push({
-                    inlineData: { mimeType: split.mimeType, data: split.base64 },
-                });
-            }
-        }
-        return { role: m.role === "assistant" ? "model" : "user", parts };
-    });
-
-    const payload: Record<string, any> = { contents };
-    if (options.systemPrompt?.trim()) {
-        payload.systemInstruction = { parts: [{ text: options.systemPrompt.trim() }] };
-    }
-    if (options.tools?.length) {
-        payload.tools = [{ functionDeclarations: options.tools }];
-    }
-
-    const cleanModel = model.replace(/^models\//, "");
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-        cleanModel,
-    )}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey.trim())}`;
-
-    const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: options.signal,
-    });
-
-    if (!response.ok) {
-        throw new Error(await parseErrorResponse(response, "Google AI Studio"));
-    }
-
-    let fullText = "";
-    const toolCalls: LlmToolCall[] = [];
-
-    await streamSse(response, options.signal, (data) => {
-        try {
-            const parsed = JSON.parse(data);
-            const parts = parsed.candidates?.[0]?.content?.parts;
-            if (!Array.isArray(parts)) return;
-            for (const part of parts) {
-                if (typeof part.text === "string" && part.text) {
-                    fullText += part.text;
-                    options.onChunk(part.text);
-                }
-                if (part.functionCall?.name) {
-                    toolCalls.push({
-                        id: crypto.randomUUID(),
-                        name: part.functionCall.name,
-                        arguments: part.functionCall.args || {},
-                    });
-                }
-            }
-        } catch {
-            // Ignore malformed frames
-        }
-    });
-
-    if (toolCalls.length > 0) options.onToolCalls?.(toolCalls);
-    return fullText;
-}
-
-// =============================================================================
-// Ollama (Local)
-// =============================================================================
-
-async function streamOllama(
-    model: string,
-    endpoint: string,
-    options: StreamChatOptions,
-): Promise<string> {
-    const vision = resolveVisionImages("ollama", model, options);
-    const lastUserIdx = getLastUserIndex(options.messages);
-
-    const messages: Array<{ role: string; content: string; images?: string[] }> = [];
-    if (options.systemPrompt?.trim()) {
-        messages.push({ role: "system", content: options.systemPrompt.trim() });
-    }
-
-    options.messages.forEach((msg, idx) => {
-        const entry: { role: string; content: string; images?: string[] } = {
-            role: msg.role,
-            content: formatMessageTextWithTools(msg),
-        };
-        if (vision && idx === lastUserIdx) {
-            const rawImages = vision
-                .map((img) => splitDataUrl(img.dataUrl)?.base64)
-                .filter((b): b is string => Boolean(b));
-            if (rawImages.length > 0) entry.images = rawImages;
-        }
-        messages.push(entry);
-    });
-
-    const baseUrl = endpoint.replace(/\/+$/, "");
-    const openAiTools = toOpenAiTools(options.tools);
-
-    const safeFetch = async (includeTools: boolean) => {
-        const payload: Record<string, any> = { model, messages, stream: true };
-        if (includeTools && openAiTools) payload.tools = openAiTools;
-        try {
-            return await fetch(`${baseUrl}/api/chat`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-                signal: options.signal,
-            });
+            return await fetch(input, init);
         } catch (err: any) {
-            if (options.signal?.aborted || err?.name === "AbortError") throw err;
+            if (init?.signal?.aborted || err?.name === "AbortError") throw err;
             throw new Error(
                 `Unable to connect to Ollama at ${baseUrl}. Ensure Ollama is running and accessible.`,
             );
         }
     };
-
-    const response = await fetchWithToolFallback(
-        safeFetch,
-        Boolean(openAiTools),
-        "Ollama",
-    );
-
-    let fullText = "";
-    const toolCalls: LlmToolCall[] = [];
-
-    await streamNdjson(response, options.signal, (line) => {
-        const raw = line.startsWith("data:") ? line.slice(5).trim() : line;
-        try {
-            const parsed = JSON.parse(raw);
-            const delta = parsed.message?.content;
-            if (typeof delta === "string" && delta) {
-                fullText += delta;
-                options.onChunk(delta);
-            }
-            if (Array.isArray(parsed.message?.tool_calls)) {
-                for (const tc of parsed.message.tool_calls) {
-                    if (!tc.function?.name) continue;
-                    const args =
-                        typeof tc.function.arguments === "string"
-                            ? parseToolArgs(tc.function.arguments)
-                            : tc.function.arguments || {};
-                    toolCalls.push({
-                        id: tc.id || crypto.randomUUID(),
-                        name: tc.function.name,
-                        arguments: args,
-                    });
-                }
-            }
-        } catch {
-            // Ignore unparseable lines
-        }
-    });
-
-    if (toolCalls.length > 0) options.onToolCalls?.(toolCalls);
-    return fullText;
 }
 
-// =============================================================================
-// Provider Dispatcher
-// =============================================================================
+function createLanguageModel(params: {
+    provider: LlmProvider;
+    model: string;
+    apiKey: string;
+    ollamaEndpoint: string;
+    webSearchEnabled?: boolean;
+}) {
+    const { provider, model, apiKey, ollamaEndpoint, webSearchEnabled } = params;
+    switch (provider) {
+        case "openrouter":
+            return createOpenAICompatible({
+                name: "openrouter",
+                baseURL: "https://openrouter.ai/api/v1",
+                apiKey: apiKey.trim(),
+                headers: {
+                    "HTTP-Referer": "https://foliet.app",
+                    "X-Title": "Foliet",
+                },
+                fetch: webSearchEnabled ? openRouterWebSearchFetch : undefined,
+            })(model);
+        case "openai":
+            return createOpenAI({ apiKey: apiKey.trim() }).chat(model);
+        case "anthropic":
+            return createAnthropic({
+                apiKey: apiKey.trim(),
+                headers: { "anthropic-dangerous-direct-browser-access": "true" },
+            })(model);
+        case "google-ai-studio":
+            return createGoogleGenerativeAI({ apiKey: apiKey.trim() })(
+                model.replace(/^models\//, ""),
+            );
+        case "ollama":
+            return createOpenAICompatible({
+                name: "ollama",
+                baseURL: `${normalizeOllamaBase(ollamaEndpoint)}/v1`,
+                apiKey: "ollama",
+                fetch: createOllamaFetch(ollamaEndpoint),
+            })(model);
+        default:
+            throw new Error(`Unsupported LLM provider: ${provider}`);
+    }
+}
 
-export function dispatchProviderStream(params: {
+function buildSdkMessages(
+    options: StreamChatOptions,
+    vision: VisionImageInput[] | null,
+): ModelMessage[] {
+    const filtered = options.messages.filter(
+        (m) => m.role === "user" || m.role === "assistant",
+    );
+    const lastUserIdx = filtered.reduce(
+        (acc, m, idx) => (m.role === "user" ? idx : acc),
+        -1,
+    );
+
+    return filtered.map((m, idx): ModelMessage => {
+        if (m.role === "assistant") {
+            return { role: "assistant", content: m.content };
+        }
+        if (!vision || idx !== lastUserIdx) {
+            return { role: "user", content: m.content };
+        }
+
+        const content: Array<
+            | { type: "text"; text: string }
+            | { type: "image"; image: string; mediaType?: string }
+        > = [{ type: "text", text: m.content }];
+
+        for (const img of vision) {
+            if (img.caption) {
+                content.push({
+                    type: "text",
+                    text: `[Figure Reference: ${img.caption}]`,
+                });
+            }
+            const split = splitDataUrl(img.dataUrl);
+            content.push(
+                split
+                    ? { type: "image", image: split.base64, mediaType: split.mimeType }
+                    : { type: "image", image: img.dataUrl },
+            );
+        }
+        return { role: "user", content };
+    });
+}
+
+function isToolUnsupportedError(err: unknown): boolean {
+    if (APICallError.isInstance(err) && err.statusCode === 400) {
+        return /tool|function|support/i.test(
+            `${err.message} ${err.responseBody ?? ""}`,
+        );
+    }
+    const msg = extractErrorMessage(err, "");
+    return /\b400\b/.test(msg) && /tool|function|support/i.test(msg);
+}
+
+function formatProviderError(err: unknown, provider: LlmProvider): Error {
+    if (APICallError.isInstance(err)) {
+        const status = err.statusCode ? `${err.statusCode}: ` : "";
+        return new Error(`[${PROVIDER_NAMES[provider]}] ${status}${err.message}`);
+    }
+    if (err instanceof Error) return err;
+    return new Error(extractErrorMessage(err, "LLM request failed."));
+}
+
+export async function dispatchProviderStream(params: {
     provider: LlmProvider;
     model: string;
     apiKey: string;
@@ -511,36 +211,65 @@ export function dispatchProviderStream(params: {
     options: StreamChatOptions;
 }): Promise<string> {
     const { provider, model, apiKey, ollamaEndpoint, options } = params;
-    switch (provider) {
-        case "openrouter":
-            return streamOpenAiCompatible(
-                {
-                    provider: "openrouter",
-                    url: "https://openrouter.ai/api/v1/chat/completions",
-                    extraHeaders: {
-                        "HTTP-Referer": "https://foliet.app",
-                        "X-Title": "Foliet",
-                    },
-                    allowWebSearch: true,
-                },
-                model,
-                apiKey,
-                options,
-            );
-        case "openai":
-            return streamOpenAiCompatible(
-                { provider: "openai", url: "https://api.openai.com/v1/chat/completions" },
-                model,
-                apiKey,
-                options,
-            );
-        case "anthropic":
-            return streamAnthropic(model, apiKey, options);
-        case "google-ai-studio":
-            return streamGoogleAiStudio(model, apiKey, options);
-        case "ollama":
-            return streamOllama(model, ollamaEndpoint, options);
-        default:
-            throw new Error(`Unsupported LLM provider: ${provider}`);
-    }
+    const vision =
+        options.visionImages?.length && isVisionCapableModel(provider, model)
+            ? options.visionImages
+            : null;
+    const messages = buildSdkMessages(options, vision);
+    const languageModel = createLanguageModel({
+        provider,
+        model,
+        apiKey,
+        ollamaEndpoint,
+        webSearchEnabled: options.webSearchEnabled,
+    });
+    const hasTools = Boolean(options.tools && Object.keys(options.tools).length > 0);
+
+    const runStream = async (includeTools: boolean): Promise<string> => {
+        let progressed = false;
+        let fullText = "";
+
+        try {
+            const result = streamText({
+                model: languageModel,
+                system: options.systemPrompt?.trim() || undefined,
+                messages,
+                tools: includeTools ? options.tools : undefined,
+                stopWhen:
+                    includeTools && hasTools
+                        ? stepCountIs(options.maxSteps ?? 3)
+                        : undefined,
+                maxOutputTokens: provider === "anthropic" ? 4096 : undefined,
+                abortSignal: options.signal,
+            });
+
+            for await (const part of result.fullStream) {
+                if (part.type === "text-delta") {
+                    const delta = part.text;
+                    if (delta) {
+                        progressed = true;
+                        fullText += delta;
+                        options.onChunk(delta);
+                    }
+                } else if (part.type === "tool-call") {
+                    progressed = true;
+                } else if (part.type === "error") {
+                    throw part.error instanceof Error
+                        ? part.error
+                        : new Error(
+                            extractErrorMessage(part.error, "LLM streaming failed."),
+                        );
+                }
+            }
+            return fullText;
+        } catch (err) {
+            if (isAbortError(err, options.signal)) throw err;
+            if (includeTools && hasTools && !progressed && isToolUnsupportedError(err)) {
+                return runStream(false);
+            }
+            throw formatProviderError(err, provider);
+        }
+    };
+
+    return runStream(hasTools);
 }

@@ -1,12 +1,11 @@
-import { captureFigureCropFromPage } from "@/services/figureCropper";
 import type {
-    LlmToolCall,
     SummaryChatTakeawayInput,
     SummaryCropInput,
+    SummaryFocusMode,
     SummaryHighlightInput,
     SummaryNoteInput,
     VisionImageInput,
-} from "@/services/llm";
+} from "@/services/llm/types";
 import { PdfService } from "@/services/pdf";
 import { DocumentDatabase } from "@/services/storage/database";
 import {
@@ -16,7 +15,9 @@ import {
     type PdfAnnotation,
 } from "@/types/annotations";
 import type { ChatConversation } from "@/types/chat";
-import { formatCropMarkdown, resolveCropUri } from "@/utils/llmFormatting";
+import type { PdfChapter } from "@/types/document";
+import { resolveCropUri } from "@/utils/llmFormatting";
+import { buildChapterSummaryPrompt } from "@/utils/llmPrompts";
 import { getPageRagChunks } from "@/utils/pdfDom";
 
 export interface AiSummaryState {
@@ -77,9 +78,7 @@ export async function resolveCropsForVision(crops: SummaryCropInput[]): Promise<
     enrichedCrops: SummaryCropInput[];
     visionImages: VisionImageInput[];
 }> {
-    if (crops.length === 0) {
-        return { enrichedCrops: crops, visionImages: [] };
-    }
+    if (crops.length === 0) return { enrichedCrops: crops, visionImages: [] };
 
     const enrichedCrops = await Promise.all(
         crops.map(async (crop) => {
@@ -88,13 +87,11 @@ export async function resolveCropsForVision(crops: SummaryCropInput[]): Promise<
                 return { ...crop, resolvedDataUrl: crop.imageUrl };
             }
             if (/^(idb:\/\/|db:\/\/|crop-)/.test(crop.imageUrl)) {
-                try {
-                    const dataUrl = await DocumentDatabase.getFigureCrop(crop.imageUrl);
-                    if (dataUrl?.startsWith("data:")) {
-                        return { ...crop, resolvedDataUrl: dataUrl };
-                    }
-                } catch {
-                    // Fall back to URI/caption-only reference
+                const dataUrl = await DocumentDatabase.getFigureCrop(crop.imageUrl).catch(
+                    () => null,
+                );
+                if (dataUrl?.startsWith("data:")) {
+                    return { ...crop, resolvedDataUrl: dataUrl };
                 }
             }
             return crop;
@@ -139,7 +136,6 @@ export function collectRangeContext(
 
     for (const a of annotations) {
         if (!inRange(a.pageNumber)) continue;
-
         if (isCropAnnotation(a)) {
             crops.push({
                 id: a.id,
@@ -198,8 +194,46 @@ export async function fetchRangeText(
             .join("\n\n")
             .slice(0, 20_000);
     }
-
     return PdfService.extractPageRangeText(pdfProxy, startPage, endPage, 18_000);
+}
+
+export async function prepareChapterPromptData(params: {
+    docId: string;
+    docTitle: string;
+    chapter: PdfChapter;
+    pdfProxy: any | null;
+    focusMode: SummaryFocusMode;
+    annotations: PdfAnnotation[];
+    conversations: ChatConversation[];
+    includeNotes: boolean;
+    includeChats: boolean;
+}) {
+    const chapterText = await fetchRangeText(
+        params.docId,
+        params.pdfProxy,
+        params.chapter.startPage,
+        params.chapter.endPage,
+    );
+    const ctx = collectRangeContext(params.annotations, params.conversations, {
+        startPage: params.chapter.startPage,
+        endPage: params.chapter.endPage,
+        includeNotes: params.includeNotes,
+        includeChats: params.includeChats,
+    });
+    const { enrichedCrops, visionImages } = await resolveCropsForVision(ctx.crops);
+    const prompt = buildChapterSummaryPrompt({
+        docTitle: params.docTitle,
+        chapterTitle: params.chapter.title,
+        startPage: params.chapter.startPage,
+        endPage: params.chapter.endPage,
+        focusMode: params.focusMode,
+        chapterText,
+        highlights: ctx.highlights,
+        notes: ctx.notes,
+        crops: enrichedCrops,
+        chatTakeaways: ctx.chatTakeaways,
+    });
+    return { prompt, visionImages };
 }
 
 export function upsertChapterSection(
@@ -219,9 +253,7 @@ export function upsertChapterSection(
     if (!base) return `# ${docTitle}\n\n${cleanSection}\n`;
 
     const escaped = chapterTitle.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const headingRe = new RegExp(`^##\\s+${escaped}\\s*$`, "im");
-    const match = headingRe.exec(base);
-
+    const match = new RegExp(`^##\\s+${escaped}\\s*$`, "im").exec(base);
     if (!match) return `${base}\n\n${cleanSection}\n`;
 
     const startIdx = match.index;
@@ -233,60 +265,5 @@ export function upsertChapterSection(
 
     const before = base.slice(0, startIdx).trimEnd();
     const after = base.slice(endIdx).trimStart();
-
     return [before, cleanSection, after].filter(Boolean).join("\n\n") + "\n";
-}
-
-export async function executeSummaryToolCalls(
-    calls: LlmToolCall[],
-    context: {
-        docId: string;
-        pdfProxy: any | null;
-        initialVision: VisionImageInput[];
-        jumpToPage?: (page: number) => void;
-    },
-): Promise<{ toolResults: string[]; extraVision: VisionImageInput[] }> {
-    const toolResults: string[] = [];
-    const extraVision = [...context.initialVision];
-
-    for (const call of calls) {
-        const pageNum = Math.max(1, Math.round(Number(call.arguments?.pageNumber) || 1));
-
-        if (call.name === "add_figure_to_summary") {
-            const caption =
-                typeof call.arguments?.caption === "string"
-                    ? call.arguments.caption.trim()
-                    : undefined;
-            const captured = await captureFigureCropFromPage(pageNum, caption, {
-                docId: context.docId,
-                jumpToPage: context.jumpToPage,
-            });
-            if (captured) {
-                const uri = resolveCropUri(captured.crop.id, captured.crop.imageUrl);
-                const alt = captured.crop.caption || `Figure (Page ${pageNum})`;
-                const dataUrl = await DocumentDatabase.getFigureCrop(uri);
-                if (dataUrl) {
-                    extraVision.push({ dataUrl, caption: `Page ${pageNum}: ${alt}` });
-                }
-                toolResults.push(
-                    `Captured figure on Page ${pageNum}. Embed it in the updated Markdown using: ${formatCropMarkdown(alt, captured.crop.id, uri)}`,
-                );
-            } else {
-                toolResults.push(`Could not capture figure on Page ${pageNum}.`);
-            }
-        } else if (call.name === "navigate_to") {
-            context.jumpToPage?.(pageNum);
-            const text = await fetchRangeText(
-                context.docId,
-                context.pdfProxy,
-                pageNum,
-                pageNum,
-            );
-            toolResults.push(
-                text ? `Page ${pageNum} text:\n${text}` : `Navigated to Page ${pageNum}.`,
-            );
-        }
-    }
-
-    return { toolResults, extraVision };
 }

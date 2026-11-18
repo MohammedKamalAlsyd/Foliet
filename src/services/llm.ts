@@ -18,11 +18,11 @@ import {
     isVisionCapableModel,
     PROVIDER_NAMES,
 } from "./llm/providers";
-import { FOLIET_TOOL_DEFINITIONS } from "./llm/tools";
+import { buildCopilotTools, buildSummaryTools } from "./llm/tools";
 import type { StreamChatOptions } from "./llm/types";
 
 export type * from "./llm/types";
-export { FOLIET_TOOL_DEFINITIONS, isVisionCapableModel };
+export { buildCopilotTools, buildSummaryTools, isVisionCapableModel };
 
 export class LlmService {
     public static async streamChat(options: StreamChatOptions): Promise<string> {
