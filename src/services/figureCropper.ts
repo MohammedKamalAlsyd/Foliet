@@ -85,7 +85,9 @@ function findCaptionAnchoredBox(
         const figPrefix = figNumMatch ? figNumMatch[1].toLowerCase() : "";
 
         anchorEl =
-            spans.find((sp) => normalizeText(sp.textContent || "").includes(needle)) ??
+            spans.find((sp) =>
+                normalizeText(sp.textContent || "").includes(needle),
+            ) ??
             (figPrefix
                 ? spans.find((sp) =>
                     normalizeText(sp.textContent || "").startsWith(figPrefix),
@@ -105,7 +107,8 @@ function findCaptionAnchoredBox(
 
     const anchorRect = anchorEl.getBoundingClientRect();
     const captionTopNorm = (anchorRect.top - pageRect.top) / pageRect.height;
-    const captionBottomNorm = (anchorRect.bottom - pageRect.top) / pageRect.height;
+    const captionBottomNorm =
+        (anchorRect.bottom - pageRect.top) / pageRect.height;
 
     if (captionTopNorm < 0.22) {
         const y = Math.max(0.04, captionTopNorm - 0.01);
@@ -151,11 +154,11 @@ export async function captureFigureCropFromPage(
         }
         if (pageCrops.length > 0) {
             const matched = cleanCaption
-                ? pageCrops.find((c) =>
+                ? (pageCrops.find((c) =>
                     normalizeText(c.caption || "").includes(
                         normalizeText(cleanCaption),
                     ),
-                ) ?? pageCrops[0]
+                ) ?? pageCrops[0])
                 : pageCrops[0];
             return { crop: matched, created: false };
         }
@@ -209,8 +212,7 @@ export async function captureFigureCropFromPage(
     await DocumentDatabase.saveFigureCrop(id, dataUrl, docId);
 
     if (docId) {
-        const current = await DocumentDatabase.getAnnotations(docId).catch(() => []);
-        await DocumentDatabase.saveAnnotations(docId, [crop, ...current]);
+        await DocumentDatabase.appendAnnotation(docId, crop);
     }
 
     if (typeof window !== "undefined") {
@@ -236,15 +238,16 @@ export async function insertFigureIntoSummary(
         : `idb://${crop.id}`;
     const alt = crop.caption?.trim() || `Figure (Page ${crop.pageNumber})`;
 
+    let handledByLiveEditor = false;
     if (typeof window !== "undefined") {
-        window.dispatchEvent(
-            new CustomEvent("foliet:insert-summary-image", {
-                detail: { docId, src, alt, pageNumber: crop.pageNumber },
-            }),
-        );
+        const evt = new CustomEvent("foliet:insert-summary-image", {
+            cancelable: true,
+            detail: { docId, src, alt, pageNumber: crop.pageNumber },
+        });
+        handledByLiveEditor = !window.dispatchEvent(evt);
     }
 
-    if (docId) {
+    if (!handledByLiveEditor && docId) {
         const existing = await DocumentDatabase.getSummary(docId);
         const mdImage = `![${alt}](${src})`;
         const currContent = existing?.content ?? "";

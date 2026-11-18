@@ -29,6 +29,7 @@ import {
   Globe,
   ListTree,
   MessageSquare,
+  RotateCcw,
   Send,
   Sparkles,
   Square,
@@ -92,6 +93,8 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     summaryFocusMode,
     setSummaryFocusMode,
     activeSummary,
+    previousSummary,
+    isLoadingSummary,
     isSummarizing,
     chapters,
     selectedChapterId,
@@ -105,6 +108,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     setSummaryWebSearch,
     updateActiveSummaryLocal,
     loadSummary,
+    restorePreviousSummary,
     generateChapterSummary,
     generateFullBookSummary,
     modifySummaryWithInstruction,
@@ -116,6 +120,8 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       summaryFocusMode: s.summaryFocusMode,
       setSummaryFocusMode: s.setSummaryFocusMode,
       activeSummary: s.activeSummary,
+      previousSummary: s.previousSummary,
+      isLoadingSummary: s.isLoadingSummary,
       isSummarizing: s.isSummarizing,
       chapters: s.chapters,
       selectedChapterId: s.selectedChapterId,
@@ -129,6 +135,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       setSummaryWebSearch: s.setSummaryWebSearch,
       updateActiveSummaryLocal: s.updateActiveSummaryLocal,
       loadSummary: s.loadSummary,
+      restorePreviousSummary: s.restorePreviousSummary,
       generateChapterSummary: s.generateChapterSummary,
       generateFullBookSummary: s.generateFullBookSummary,
       modifySummaryWithInstruction: s.modifySummaryWithInstruction,
@@ -153,7 +160,9 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   const [fallbackAnnotations, setFallbackAnnotations] = useState<
     PdfAnnotation[]
   >([]);
-  const [draftMarkdown, setDraftMarkdown] = useState("");
+  const [draftMarkdown, setDraftMarkdown] = useState(
+    () => activeSummary?.content ?? "",
+  );
   const [instruction, setInstruction] = useState("");
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">(
     "idle",
@@ -165,6 +174,9 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   const docTitle = activeDoc?.title || "Untitled Document";
   const sourceAnnotations = liveAnnotations ?? fallbackAnnotations;
 
+  const sourceSnapshotRef = useRef(activeSummary?.sourceSnapshot);
+  sourceSnapshotRef.current = activeSummary?.sourceSnapshot;
+
   const selectedChapter = useMemo(
     () => chapters.find((c) => c.id === selectedChapterId),
     [chapters, selectedChapterId],
@@ -173,6 +185,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   // Load summary, conversations, and fallback annotations when workspace opens
   useEffect(() => {
     if (!isSummaryWorkspaceOpen || !docId) return;
+    pendingSaveMarkdownRef.current = null;
     loadSummary(docId);
     loadConversations(docId);
     if (!liveAnnotations) {
@@ -188,10 +201,11 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     loadConversations,
   ]);
 
-  // Sync store content into editor draft
+  // Sync store content into editor draft once loaded
   useEffect(() => {
+    if (isLoadingSummary) return;
     setDraftMarkdown(activeSummary?.content ?? "");
-  }, [activeSummary?.content]);
+  }, [activeSummary?.content, isLoadingSummary]);
 
   // Close chapter jump popover on outside click
   useEffect(() => {
@@ -217,7 +231,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         await DocumentDatabase.saveSummary(
           docId,
           markdownToSave,
-          activeSummary?.sourceSnapshot,
+          sourceSnapshotRef.current,
         );
         pendingSaveMarkdownRef.current = null;
         setSaveStatus("saved");
@@ -225,11 +239,12 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         setSaveStatus("idle");
       }
     },
-    [docId, activeSummary?.sourceSnapshot],
+    [docId],
   );
 
   const handleEditorMarkdownChange = useCallback(
     (nextMd: string) => {
+      if (isLoadingSummary) return;
       setDraftMarkdown(nextMd);
       updateActiveSummaryLocal(nextMd);
       pendingSaveMarkdownRef.current = nextMd;
@@ -243,7 +258,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         flushAutoSave(nextMd);
       }, 700);
     },
-    [flushAutoSave, updateActiveSummaryLocal],
+    [flushAutoSave, isLoadingSummary, updateActiveSummaryLocal],
   );
 
   // Listen for 1-click "Insert in Summary" events from PdfPage / `add_figure_to_summary`
@@ -258,8 +273,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       ).detail;
       if (!detail?.src) return;
       if (detail.docId && docId && detail.docId !== docId) return;
+      if (!editorRef.current) return;
 
-      editorRef.current?.insertImage({
+      e.preventDefault();
+      editorRef.current.insertImage({
         src: detail.src,
         alt: detail.alt || "Captured PDF figure",
       });
@@ -270,22 +287,25 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     };
   }, [docId]);
 
-  // Flush pending edits on unmount
+  // Flush pending edits only on unmount or docId change
   useEffect(() => {
+    const currentDocId = docId;
     return () => {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
       }
-      if (pendingSaveMarkdownRef.current !== null && docId) {
+      if (pendingSaveMarkdownRef.current !== null && currentDocId) {
+        const toFlush = pendingSaveMarkdownRef.current;
+        pendingSaveMarkdownRef.current = null;
         DocumentDatabase.saveSummary(
-          docId,
-          pendingSaveMarkdownRef.current,
-          activeSummary?.sourceSnapshot,
+          currentDocId,
+          toFlush,
+          sourceSnapshotRef.current,
         ).catch(() => {});
       }
     };
-  }, [docId, activeSummary?.sourceSnapshot]);
+  }, [docId]);
 
   const handleClose = useCallback(async () => {
     if (isSummarizing) {
@@ -354,6 +374,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
           conversations,
         });
       }
+      pendingSaveMarkdownRef.current = null;
       setSaveStatus("saved");
     } catch (err: any) {
       toast.error(err?.message || "Failed to generate summary");
@@ -380,11 +401,24 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         conversations,
         jumpToPage: onJumpToPage,
       });
+      pendingSaveMarkdownRef.current = null;
       setSaveStatus("saved");
     } catch (err: any) {
       setInstruction(trimmed);
       toast.error(err?.message || "Failed to apply summary instruction");
     }
+  };
+
+  const handleRestorePrevious = async () => {
+    if (!docId || isSummarizing) return;
+    if (autoSaveTimerRef.current) {
+      clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = null;
+    }
+    pendingSaveMarkdownRef.current = null;
+    await restorePreviousSummary(docId);
+    setSaveStatus("saved");
+    toast.success("Restored previous summary");
   };
 
   const handleCopyMarkdown = async () => {
@@ -496,6 +530,11 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         : "Draft";
 
   const isOpenRouter = llmProvider === "openrouter";
+  const canRestorePrevious = Boolean(
+    !isSummarizing &&
+    previousSummary?.content?.trim() &&
+    previousSummary.content !== draftMarkdown,
+  );
 
   return (
     <aside
@@ -523,6 +562,20 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {canRestorePrevious && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              title="Restore previous summary snapshot"
+              onClick={handleRestorePrevious}
+              className="h-7 gap-1 rounded-md px-2 text-[11px] text-amber-600 dark:text-amber-400 hover:bg-muted"
+            >
+              <RotateCcw size={12} strokeWidth={1.5} />
+              <span>Restore</span>
+            </Button>
+          )}
+
           {/* Chapter Selector */}
           <select
             aria-label="Target chapter"

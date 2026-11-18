@@ -286,15 +286,37 @@ export function ViewerView() {
       if (detail.docId && activeDoc?.id && detail.docId !== activeDoc.id) {
         return;
       }
-      setCropAnnotations((prev) =>
-        prev.some((c) => c.id === detail.crop!.id)
-          ? prev
-          : [detail.crop!, ...prev],
-      );
+      setCropAnnotations((prev) => {
+        if (prev.some((c) => c.id === detail.crop!.id)) return prev;
+        const next = [detail.crop!, ...prev];
+        savedCropsRef.current = next;
+        return next;
+      });
     };
     window.addEventListener("foliet:crop-saved", onCropSaved);
     return () => window.removeEventListener("foliet:crop-saved", onCropSaved);
   }, [activeDoc?.id]);
+
+  // Sync AI-created annotations (`highlight_passage`) into Viewer state
+  useEffect(() => {
+    const onAnnotationSaved = (e: Event) => {
+      const detail = (
+        e as CustomEvent<{ docId?: string; annotation?: PdfAnnotation }>
+      ).detail;
+      if (!detail?.annotation) return;
+      if (detail.docId && activeDoc?.id && detail.docId !== activeDoc.id) {
+        return;
+      }
+      const incoming = detail.annotation;
+      if (isCropAnnotation(incoming)) return;
+      setAnnotations((prev) =>
+        prev.some((a) => a.id === incoming.id) ? prev : [...prev, incoming],
+      );
+    };
+    window.addEventListener("foliet:annotation-saved", onAnnotationSaved);
+    return () =>
+      window.removeEventListener("foliet:annotation-saved", onAnnotationSaved);
+  }, [activeDoc?.id, setAnnotations]);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((prev) => {
@@ -916,7 +938,6 @@ export function ViewerView() {
     }): Promise<CropAnnotation | undefined> => {
       if (!activeDoc?.id) return undefined;
       const id = `crop-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      await DocumentDatabase.saveFigureCrop(id, crop.imageUrl, activeDoc.id);
       const created: CropAnnotation = {
         id,
         pageNumber: crop.pageNumber,
@@ -929,7 +950,15 @@ export function ViewerView() {
         width: crop.width,
         height: crop.height,
       };
-      setCropAnnotations((prev) => [created, ...prev]);
+      await Promise.all([
+        DocumentDatabase.saveFigureCrop(id, crop.imageUrl, activeDoc.id),
+        DocumentDatabase.appendAnnotation(activeDoc.id, created),
+      ]);
+      setCropAnnotations((prev) => {
+        const next = [created, ...prev];
+        savedCropsRef.current = next;
+        return next;
+      });
       toast.success("Figure captured");
       return created;
     },
@@ -1079,8 +1108,17 @@ export function ViewerView() {
             setBookmarks((prev) => prev.filter((b) => b.id !== id));
           }}
           onDeleteCrop={async (id) => {
-            await DocumentDatabase.deleteFigureCrop(id);
-            setCropAnnotations((prev) => prev.filter((c) => c.id !== id));
+            await Promise.all([
+              DocumentDatabase.deleteFigureCrop(id),
+              activeDoc?.id
+                ? DocumentDatabase.removeAnnotation(activeDoc.id, id)
+                : Promise.resolve(),
+            ]);
+            setCropAnnotations((prev) => {
+              const next = prev.filter((c) => c.id !== id);
+              savedCropsRef.current = next;
+              return next;
+            });
           }}
         />
 

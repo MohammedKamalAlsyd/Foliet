@@ -396,6 +396,7 @@ export const SummaryDocsEditor = forwardRef<
   const lastSyncedMarkdownRef = useRef<string>(markdown);
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStreamingRef = useRef<boolean>(isStreaming);
+  const isApplyingExternalRef = useRef<boolean>(false);
   const onJumpToPageRef = useRef(onJumpToPage);
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -511,9 +512,13 @@ export const SummaryDocsEditor = forwardRef<
         },
       },
     },
+    onCreate: ({ editor: createdEditor }) => {
+      lastSyncedMarkdownRef.current = createdEditor.getMarkdown();
+    },
     onUpdate: ({ editor: activeEditor }) => {
-      if (isStreamingRef.current) return;
+      if (isStreamingRef.current || isApplyingExternalRef.current) return;
       const nextMd = activeEditor.getMarkdown();
+      if (nextMd === lastSyncedMarkdownRef.current) return;
       lastSyncedMarkdownRef.current = nextMd;
       onMarkdownChange?.(nextMd);
     },
@@ -548,21 +553,36 @@ export const SummaryDocsEditor = forwardRef<
 
   // Toggle editability cleanly when streaming starts/finishes
   useEffect(() => {
-    if (!editor) return;
-    editor.setEditable(!isStreaming);
+    if (!editor || editor.isDestroyed) return;
+    isApplyingExternalRef.current = true;
+    try {
+      editor.setEditable(!isStreaming);
+    } finally {
+      queueMicrotask(() => {
+        isApplyingExternalRef.current = false;
+      });
+    }
   }, [editor, isStreaming]);
 
   // Sync external Markdown updates (initial load, regeneration, or streaming chunks)
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     if (markdown === lastSyncedMarkdownRef.current) return;
 
     const applyContent = () => {
+      if (editor.isDestroyed) return;
       lastSyncedMarkdownRef.current = markdown;
-      editor.commands.setContent(markdown || "", {
-        emitUpdate: false,
-        contentType: "markdown",
-      });
+      isApplyingExternalRef.current = true;
+      try {
+        editor.commands.setContent(markdown || "", {
+          emitUpdate: false,
+          contentType: "markdown",
+        });
+      } finally {
+        queueMicrotask(() => {
+          isApplyingExternalRef.current = false;
+        });
+      }
     };
 
     if (isStreaming) {

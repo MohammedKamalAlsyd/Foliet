@@ -399,7 +399,7 @@ async function executeToolCall(
             createdAt: new Date().toISOString(),
         };
 
-        await DocumentDatabase.saveAnnotations(context.docId, [annotation]);
+        await DocumentDatabase.appendAnnotation(context.docId, annotation);
 
         const docStoreAny = useDocumentStore.getState() as unknown as {
             addAnnotation?: (a: TextMarkupAnnotation) => void;
@@ -500,7 +500,8 @@ async function executeToolCall(
     }
 
     if (call.name === "add_figure_to_summary") {
-        const caption = typeof args.caption === "string" ? args.caption.trim() : undefined;
+        const caption =
+            typeof args.caption === "string" ? args.caption.trim() : undefined;
         const captured = await captureFigureCropFromPage(pageNumber, caption, {
             docId: context.docId,
             jumpToPage: context.jumpToPage,

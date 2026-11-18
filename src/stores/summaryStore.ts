@@ -71,6 +71,7 @@ export interface ModifySummaryParams {
 
 export interface SummaryStore {
     activeSummary: AiSummaryState | null;
+    previousSummary: AiSummaryState | null;
     isLoadingSummary: boolean;
     isSummarizing: boolean;
     isSummaryWorkspaceOpen: boolean;
@@ -95,19 +96,86 @@ export interface SummaryStore {
     updateActiveSummaryLocal: (content: string) => void;
 
     loadSummary: (docId: string) => Promise<void>;
-    generateStructuredSummary: (docId: string, input: StructuredSummaryInput) => Promise<void>;
-    generateChapterSummary: (docId: string, params: ChapterGenerationParams) => Promise<void>;
-    generateFullBookSummary: (docId: string, params: FullBookGenerationParams) => Promise<void>;
-    modifySummaryWithInstruction: (docId: string, params: ModifySummaryParams) => Promise<void>;
+    restorePreviousSummary: (docId: string) => Promise<void>;
+    generateStructuredSummary: (
+        docId: string,
+        input: StructuredSummaryInput,
+    ) => Promise<void>;
+    generateChapterSummary: (
+        docId: string,
+        params: ChapterGenerationParams,
+    ) => Promise<void>;
+    generateFullBookSummary: (
+        docId: string,
+        params: FullBookGenerationParams,
+    ) => Promise<void>;
+    modifySummaryWithInstruction: (
+        docId: string,
+        params: ModifySummaryParams,
+    ) => Promise<void>;
     cancelSummaryStreaming: () => void;
     deleteSummary: (docId: string) => Promise<void>;
 }
 
 let activeSummaryAbortController: AbortController | null = null;
+let latestLoadToken = 0;
 
-async function resolveCropsForVision(
-    crops: SummaryCropInput[],
-): Promise<{
+function backupStorageKey(docId: string): string {
+    return `foliet:summary-prev:${docId}`;
+}
+
+function readPreviousSummaryBackup(docId: string): AiSummaryState | null {
+    try {
+        const raw = localStorage.getItem(backupStorageKey(docId));
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as AiSummaryState;
+        if (
+            typeof parsed?.content === "string" &&
+            parsed.content.trim().length > 0
+        ) {
+            return parsed;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function writePreviousSummaryBackup(
+    docId: string,
+    summary: AiSummaryState | null,
+): void {
+    try {
+        if (!summary || !summary.content.trim()) {
+            localStorage.removeItem(backupStorageKey(docId));
+        } else {
+            localStorage.setItem(backupStorageKey(docId), JSON.stringify(summary));
+        }
+    } catch {
+        // Ignore storage quota errors
+    }
+}
+
+async function capturePreviousSnapshot(
+    docId: string,
+    inMemory: AiSummaryState | null,
+    set: (partial: Partial<SummaryStore>) => void,
+): Promise<void> {
+    const existing = inMemory?.content?.trim()
+        ? inMemory
+        : await DocumentDatabase.getSummary(docId).catch(() => null);
+    if (!existing?.content?.trim()) return;
+
+    const snapshot: AiSummaryState = {
+        content: existing.content,
+        sourceSnapshot: existing.sourceSnapshot,
+        updatedAt: existing.updatedAt || Date.now(),
+    };
+    writePreviousSummaryBackup(docId, snapshot);
+    set({ previousSummary: snapshot });
+}
+
+async function resolveCropsForVision(crops: SummaryCropInput[]): Promise<{
     enrichedCrops: SummaryCropInput[];
     visionImages: VisionImageInput[];
 }> {
@@ -184,7 +252,9 @@ function collectRangeContext(
             crops.push({
                 id: a.id,
                 pageNumber: a.pageNumber,
-                imageUrl: a.imageUrl.startsWith("idb://") ? a.imageUrl : `idb://${a.id}`,
+                imageUrl: a.imageUrl.startsWith("idb://")
+                    ? a.imageUrl
+                    : `idb://${a.id}`,
                 caption: a.caption,
             });
         } else if (options.includeNotes) {
@@ -235,7 +305,9 @@ async function fetchRangeText(
         const chunks = await RagService.getDocumentChunks(docId);
         const rangeChunks = chunks
             .filter((c) => c.pageNumber >= startPage && c.pageNumber <= endPage)
-            .sort((a, b) => a.pageNumber - b.pageNumber || a.chunkIndex - b.chunkIndex);
+            .sort(
+                (a, b) => a.pageNumber - b.pageNumber || a.chunkIndex - b.chunkIndex,
+            );
 
         if (rangeChunks.length > 0) {
             const joined = rangeChunks
@@ -323,8 +395,12 @@ async function streamAndSaveSummary(
     let accumulated = "";
 
     try {
-        const { llmProvider: provider, llmModel: model, apiKeys, ollamaEndpoint } =
-            useAiConfigStore.getState();
+        const {
+            llmProvider: provider,
+            llmModel: model,
+            apiKeys,
+            ollamaEndpoint,
+        } = useAiConfigStore.getState();
         const apiKey = apiKeys[provider] ?? "";
 
         await LlmService.streamChat({
@@ -367,10 +443,15 @@ async function streamAndSaveSummary(
             },
         });
     } catch (err: any) {
-        const isAborted = err?.name === "AbortError" || abortController.signal.aborted;
+        const isAborted =
+            err?.name === "AbortError" || abortController.signal.aborted;
         if (isAborted) {
             if (accumulated.trim().length > 0) {
-                await DocumentDatabase.saveSummary(docId, accumulated, sourceSnapshot).catch(() => { });
+                await DocumentDatabase.saveSummary(
+                    docId,
+                    accumulated,
+                    sourceSnapshot,
+                ).catch(() => { });
                 set({
                     isSummarizing: false,
                     activeSummary: {
@@ -396,6 +477,7 @@ async function streamAndSaveSummary(
 
 export const useSummaryStore = create<SummaryStore>((set, get) => ({
     activeSummary: null,
+    previousSummary: null,
     isLoadingSummary: false,
     isSummarizing: false,
     isSummaryWorkspaceOpen: false,
@@ -460,18 +542,58 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
     },
 
     loadSummary: async (docId) => {
-        set({ isLoadingSummary: true });
+        if (get().isSummarizing) return;
+        const token = ++latestLoadToken;
+        set({
+            isLoadingSummary: true,
+            previousSummary: readPreviousSummaryBackup(docId),
+        });
         try {
             const summary = await DocumentDatabase.getSummary(docId);
-            set({ activeSummary: summary, isLoadingSummary: false });
+            if (token !== latestLoadToken) return;
+            set({
+                activeSummary: summary,
+                previousSummary: readPreviousSummaryBackup(docId),
+                isLoadingSummary: false,
+            });
         } catch (err) {
+            if (token !== latestLoadToken) return;
             console.warn("SummaryStore: Failed to load summary:", err);
             set({ activeSummary: null, isLoadingSummary: false });
         }
     },
 
+    restorePreviousSummary: async (docId) => {
+        const backup = get().previousSummary ?? readPreviousSummaryBackup(docId);
+        if (!backup?.content?.trim()) return;
+
+        const current = get().activeSummary;
+        await DocumentDatabase.saveSummary(
+            docId,
+            backup.content,
+            backup.sourceSnapshot,
+        );
+
+        const nextBackup = current?.content?.trim()
+            ? {
+                content: current.content,
+                sourceSnapshot: current.sourceSnapshot,
+                updatedAt: current.updatedAt || Date.now(),
+            }
+            : null;
+
+        writePreviousSummaryBackup(docId, nextBackup);
+        set({
+            activeSummary: { ...backup, updatedAt: Date.now() },
+            previousSummary: nextBackup,
+        });
+    },
+
     generateStructuredSummary: async (docId, input) => {
-        const { enrichedCrops, visionImages } = await resolveCropsForVision(input.crops);
+        await capturePreviousSnapshot(docId, get().activeSummary, set);
+        const { enrichedCrops, visionImages } = await resolveCropsForVision(
+            input.crops,
+        );
         const enrichedInput: StructuredSummaryInput = {
             ...input,
             crops: enrichedCrops,
@@ -488,11 +610,16 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
         await streamAndSaveSummary(docId, prompt, snapshot, visionImages, set);
     },
 
-    generateChapterSummary: async (docId, { docTitle, chapter, annotations, conversations }) => {
+    generateChapterSummary: async (
+        docId,
+        { docTitle, chapter, annotations, conversations },
+    ) => {
         if (activeSummaryAbortController) {
             activeSummaryAbortController.abort();
             activeSummaryAbortController = null;
         }
+
+        await capturePreviousSnapshot(docId, get().activeSummary, set);
 
         const abortController = new AbortController();
         activeSummaryAbortController = abortController;
@@ -530,7 +657,9 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                 includeNotes,
                 includeChats,
             });
-            const { enrichedCrops, visionImages } = await resolveCropsForVision(ctx.crops);
+            const { enrichedCrops, visionImages } = await resolveCropsForVision(
+                ctx.crops,
+            );
 
             const systemPrompt = LlmService.buildSummarySystemPrompt(
                 summaryFocusMode,
@@ -549,8 +678,12 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                 chatTakeaways: ctx.chatTakeaways,
             });
 
-            const { llmProvider: provider, llmModel: model, apiKeys, ollamaEndpoint } =
-                useAiConfigStore.getState();
+            const {
+                llmProvider: provider,
+                llmModel: model,
+                apiKeys,
+                ollamaEndpoint,
+            } = useAiConfigStore.getState();
             const apiKey = apiKeys[provider] ?? "";
 
             await LlmService.streamChat({
@@ -641,6 +774,8 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
             activeSummaryAbortController = null;
         }
 
+        await capturePreviousSnapshot(docId, get().activeSummary, set);
+
         const abortController = new AbortController();
         activeSummaryAbortController = abortController;
 
@@ -664,8 +799,12 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
         });
 
         try {
-            const { llmProvider: provider, llmModel: model, apiKeys, ollamaEndpoint } =
-                useAiConfigStore.getState();
+            const {
+                llmProvider: provider,
+                llmModel: model,
+                apiKeys,
+                ollamaEndpoint,
+            } = useAiConfigStore.getState();
             const apiKey = apiKeys[provider] ?? "";
             const systemPrompt = LlmService.buildSummarySystemPrompt(
                 summaryFocusMode,
@@ -802,6 +941,18 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
             activeSummaryAbortController = null;
         }
 
+        if (existingMarkdown.trim()) {
+            const snapshot: AiSummaryState = {
+                content: existingMarkdown,
+                sourceSnapshot: get().activeSummary?.sourceSnapshot,
+                updatedAt: get().activeSummary?.updatedAt || Date.now(),
+            };
+            writePreviousSummaryBackup(docId, snapshot);
+            set({ previousSummary: snapshot });
+        } else {
+            await capturePreviousSnapshot(docId, get().activeSummary, set);
+        }
+
         const abortController = new AbortController();
         activeSummaryAbortController = abortController;
 
@@ -865,8 +1016,12 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                 chatTakeaways: ctx.chatTakeaways,
             });
 
-            const { llmProvider: provider, llmModel: model, apiKeys, ollamaEndpoint } =
-                useAiConfigStore.getState();
+            const {
+                llmProvider: provider,
+                llmModel: model,
+                apiKeys,
+                ollamaEndpoint,
+            } = useAiConfigStore.getState();
             const apiKey = apiKeys[provider] ?? "";
 
             const summaryTools = FOLIET_TOOL_DEFINITIONS.filter(
@@ -928,17 +1083,15 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                             typeof call.arguments?.caption === "string"
                                 ? call.arguments.caption.trim()
                                 : undefined;
-                        const captured = await captureFigureCropFromPage(
-                            pageNum,
-                            caption,
-                            { docId, jumpToPage },
-                        );
+                        const captured = await captureFigureCropFromPage(pageNum, caption, {
+                            docId,
+                            jumpToPage,
+                        });
                         if (captured) {
                             const uri = captured.crop.imageUrl.startsWith("idb://")
                                 ? captured.crop.imageUrl
                                 : `idb://${captured.crop.id}`;
-                            const alt =
-                                captured.crop.caption || `Figure (Page ${pageNum})`;
+                            const alt = captured.crop.caption || `Figure (Page ${pageNum})`;
                             const dataUrl = await DocumentDatabase.getFigureCrop(uri);
                             if (dataUrl) {
                                 extraVision.push({
@@ -950,9 +1103,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                                 `Captured figure on Page ${pageNum}. Embed it in the updated Markdown using: ![${alt}](${uri})`,
                             );
                         } else {
-                            toolResults.push(
-                                `Could not capture figure on Page ${pageNum}.`,
-                            );
+                            toolResults.push(`Could not capture figure on Page ${pageNum}.`);
                         }
                     } else if (call.name === "navigate_to") {
                         const pageNum = Math.max(
@@ -994,10 +1145,8 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
                     await LlmService.streamChat({
                         messages: roundMessages,
                         systemPrompt,
-                        webSearchEnabled:
-                            provider === "openrouter" && summaryWebSearch,
-                        visionImages:
-                            extraVision.length > 0 ? extraVision : undefined,
+                        webSearchEnabled: provider === "openrouter" && summaryWebSearch,
+                        visionImages: extraVision.length > 0 ? extraVision : undefined,
                         provider,
                         model,
                         apiKey,
@@ -1066,6 +1215,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => ({
     },
 
     deleteSummary: async (docId) => {
+        await capturePreviousSnapshot(docId, get().activeSummary, set);
         await DocumentDatabase.deleteSummary(docId);
         set({ activeSummary: null });
     },

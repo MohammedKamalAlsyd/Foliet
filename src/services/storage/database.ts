@@ -98,6 +98,29 @@ export class DocumentDatabase {
         );
     }
 
+    public static async appendAnnotation(
+        docId: string,
+        annotation: PdfAnnotation
+    ): Promise<void> {
+        const current = await this.getAnnotations(docId);
+        const next = [
+            annotation,
+            ...current.filter((a) => a.id !== annotation.id),
+        ];
+        await this.saveAnnotations(docId, next);
+    }
+
+    public static async removeAnnotation(
+        docId: string,
+        annotationId: string
+    ): Promise<void> {
+        const current = await this.getAnnotations(docId);
+        const next = current.filter((a) => a.id !== annotationId);
+        if (next.length !== current.length) {
+            await this.saveAnnotations(docId, next);
+        }
+    }
+
     public static async deleteAnnotations(docId: string): Promise<void> {
         const db = await this.getDb();
         await db.execute("DELETE FROM doc_annotations WHERE doc_id = $1", [docId]);
@@ -199,12 +222,12 @@ export class DocumentDatabase {
             const rows =
                 docId !== undefined
                     ? await db.select<ChatRow[]>(
-                          "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations WHERE doc_id = $1 ORDER BY updated_at DESC",
-                          [docId]
-                      )
+                        "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations WHERE doc_id = $1 ORDER BY updated_at DESC",
+                        [docId]
+                    )
                     : await db.select<ChatRow[]>(
-                          "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations ORDER BY updated_at DESC"
-                      );
+                        "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations ORDER BY updated_at DESC"
+                    );
 
             return rows.map((row) => {
                 let messages: ChatMessage[] = [];
@@ -213,8 +236,8 @@ export class DocumentDatabase {
                     messages = Array.isArray(parsed)
                         ? parsed
                         : Array.isArray(parsed?.messages)
-                        ? parsed.messages
-                        : [];
+                            ? parsed.messages
+                            : [];
                 } catch {
                     messages = [];
                 }
