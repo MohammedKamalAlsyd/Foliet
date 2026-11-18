@@ -1,12 +1,9 @@
 /**
  * Foliet - AI Studio UI Store
- *
- * Manages right-sidebar visibility, active studio tab, and selection handoff.
  */
 
 import { create } from "zustand";
 import { useChatStore } from "@/stores/chatStore";
-import type { CitationReference } from "@/types/chat";
 
 export type AiStudioTab = "chat" | "search" | "chunks" | "summary" | "settings";
 
@@ -28,30 +25,18 @@ export const useAiStudioStore = create<AiStudioStore>((set) => ({
     isAiStudioOpen: false,
     activeAiTab: "chat",
 
-    setAiStudioOpen: (open) => {
-        set({ isAiStudioOpen: open });
-    },
-
-    toggleAiStudio: () => {
-        set((state) => ({ isAiStudioOpen: !state.isAiStudioOpen }));
-    },
-
-    setActiveAiTab: (tab) => {
-        set({ activeAiTab: tab });
-    },
+    setAiStudioOpen: (isAiStudioOpen) => set({ isAiStudioOpen }),
+    toggleAiStudio: () => set((s) => ({ isAiStudioOpen: !s.isAiStudioOpen })),
+    setActiveAiTab: (activeAiTab) => set({ activeAiTab }),
 
     askAboutSelection: ({ text, pageNumber, docTitle, docId }) => {
-        const citation: CitationReference = {
+        useChatStore.getState().setPendingContextSnippet({
             chunkId: `selection-${Date.now()}`,
             docId: docId ?? "",
             docTitle: docTitle ?? "Document",
             pageNumber,
             snippet: text.trim(),
-        };
-        useChatStore.getState().setPendingContextSnippet(citation);
-        set({
-            isAiStudioOpen: true,
-            activeAiTab: "chat",
         });
+        set({ isAiStudioOpen: true, activeAiTab: "chat" });
     },
 }));

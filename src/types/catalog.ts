@@ -1,20 +1,15 @@
 /**
  * Lightweight persisted index record stored in `library.json`.
- * Never holds raw PDF bytes, annotations, or transient UI state.
  */
-export interface CatalogItem {
+import type { ReadingPosition } from "./common";
+
+export interface CatalogItem extends ReadingPosition {
     id: string;
     title: string;
     fileName: string;
     filePath?: string;
     fileSize: number;
     pageCount: number;
-
-    // Reading state persisted across sessions
-    lastPage: number;
-    scrollOffset: number;
-    zoom: number;
-
     // Organization & bibliographic metadata
     authors?: string;
     year?: number;

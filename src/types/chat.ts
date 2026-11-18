@@ -1,6 +1,7 @@
 /**
  * Foliet - Chat, LLM & Reasoning Types
  */
+import type { ModelPreset } from "./common";
 import type { EmbeddingProvider, RagHyperparameters } from "./embedding";
 
 export type LlmProvider =
@@ -10,13 +11,8 @@ export type LlmProvider =
     | "openai"
     | "anthropic";
 
-export interface LlmModelPreset {
-    id: string;
-    label: string;
-    provider: LlmProvider;
+export interface LlmModelPreset extends ModelPreset<LlmProvider> {
     contextWindow: number;
-    description: string;
-    isDefault?: boolean;
 }
 
 export type MessageRole = "system" | "user" | "assistant";
@@ -56,7 +52,7 @@ export interface ChatMessage {
 
 export interface ChatConversation {
     id: string;
-    docId?: string; // Bound to an active paper or global
+    docId?: string;
     title: string;
     createdAt: number;
     updatedAt: number;

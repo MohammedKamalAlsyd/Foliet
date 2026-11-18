@@ -2,11 +2,7 @@
  * Foliet - Document Catalog, Navigation & IPC Types
  */
 import type { PdfAnnotation } from "./annotations";
-
-export interface PageDimensions {
-    width: number;
-    height: number;
-}
+import type { ReadingPosition } from "./common";
 
 export interface PdfOutlineNode {
     id: string;
@@ -33,14 +29,11 @@ export interface BookmarkItem {
     color?: string;
 }
 
-export interface DocumentItem {
+export interface DocumentItem extends Partial<ReadingPosition> {
     id: string;
     title: string;
     pages: number;
     filePath?: string;
-    lastPage?: number;
-    scrollOffset?: number;
-    zoom?: number;
     extractedAnnotations?: PdfAnnotation[];
     isIndexed?: boolean;
 }

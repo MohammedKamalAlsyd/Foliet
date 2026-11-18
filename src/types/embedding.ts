@@ -1,19 +1,9 @@
 /**
  * Foliet - Embedding & RAG Vector Retrieval Types
  */
+import type { DocRef, ModelPreset, Rect } from "./common";
 
-export type EmbeddingProvider =
-    | "local-rust"
-    | "voyage"
-    | "openai"
-    | "ollama";
-
-export interface RectSegment {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
+export type EmbeddingProvider = "local-rust" | "voyage" | "openai" | "ollama";
 
 export interface EmbeddingConfig {
     provider: EmbeddingProvider;
@@ -22,32 +12,37 @@ export interface EmbeddingConfig {
     endpoint?: string;
 }
 
-export interface EmbeddingModelPreset {
-    id: string;
-    label: string;
+export interface EmbeddingModelPreset extends ModelPreset<EmbeddingProvider> {
     dimensions: number;
-    provider: EmbeddingProvider;
-    description: string;
-    isDefault?: boolean;
 }
 
-export interface DocumentChunk {
+interface ChunkBase {
     chunkId: string;
     pageNumber: number;
-    chunkIndex: number;
     text: string;
-    embedding?: number[];
-    rectSegments?: RectSegment[];
+    rectSegments?: Rect[];
 }
 
-export interface CatalogEntry {
+export interface DocumentChunk extends ChunkBase {
+    chunkIndex: number;
+    embedding?: number[];
+}
+
+export interface RagSearchResult extends ChunkBase {
     docId: string;
     docTitle: string;
-    filePath: string;
+    similarityScore: number;
+}
+
+export interface CatalogEntry extends DocRef {
     chunkCount: number;
     embeddingModel: string;
     provider: EmbeddingProvider;
     indexedAt: string;
+}
+
+export interface IndexingScope extends DocRef {
+    selectedPageRanges?: [number, number][];
 }
 
 export interface RagCatalog {
@@ -82,25 +77,19 @@ export interface ModelDownloadProgress {
     error?: string | null;
 }
 
-export interface ModelStatus {
+interface ModelFileBase {
     modelId: string;
+    fileSizeMb: number;
+}
+
+export interface ModelStatus extends ModelFileBase {
     isAvailable: boolean;
     isDownloading: boolean;
-    fileSizeMb: number;
     provider: EmbeddingProvider;
 }
 
-export interface DownloadedModelInfo {
-    modelId: string;
-    fileSizeMb: number;
+export interface DownloadedModelInfo extends ModelFileBase {
     dirName: string;
-}
-
-export interface IndexingScope {
-    docId: string;
-    docTitle: string;
-    filePath: string;
-    selectedPageRanges?: [number, number][];
 }
 
 export interface RagSearchQuery {
@@ -110,52 +99,27 @@ export interface RagSearchQuery {
     similarityThreshold?: number;
 }
 
-export interface RagSearchResult {
-    chunkId: string;
-    docId: string;
-    docTitle: string;
-    pageNumber: number;
-    text: string;
-    similarityScore: number;
-    rectSegments?: RectSegment[];
-}
-
-/**
- * Transient RAG runtime & UI state interfaces.
- */
-export interface RagModelLifecycleState {
+export interface RagState {
+    // Model lifecycle
     localModelStatus: ModelStatus | null;
     downloadProgress: ModelDownloadProgress | null;
     isDownloadingModel: boolean;
     downloadedModels: DownloadedModelInfo[];
     isDeletingModel: boolean;
-}
-
-export interface RagIndexingState {
+    // Indexing
     isIndexing: boolean;
     indexingDocId: string | null;
     indexingProgress: number;
     indexingProgressDetail: RagIndexProgress | null;
     indexingError: string | null;
     catalog: RagCatalog;
-}
-
-export interface RagChunkInspectionState {
-    isInspectChunksMode: boolean;
+    // Chunk inspection
     inspectedChunks: DocumentChunk[];
     isLoadingChunks: boolean;
-}
-
-export interface RagSearchState {
+    // Search
     ragQuery: string;
     ragResults: RagSearchResult[];
     isSearchingRag: boolean;
     searchScope: "current" | "all";
     activeRagHighlight: RagSearchResult | null;
 }
-
-export interface RagState
-    extends RagModelLifecycleState,
-    RagIndexingState,
-    RagChunkInspectionState,
-    RagSearchState { }

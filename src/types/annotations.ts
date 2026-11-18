@@ -2,35 +2,22 @@
  * Foliet - PDF Annotation & Geometry Types
  * Note: Field names and `toolType` discriminants match the Rust serde contract.
  */
+import type { Dimensions, Point, Rect } from "./common";
 import type { UnderlineStyle } from "./tools";
 
-export interface Point {
-    x: number;
-    y: number;
-}
+export type { Point, Rect };
 
-export interface BoundingBox {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-}
-
-export interface BaseAnnotation {
+export interface BaseAnnotation extends Point {
     id: string;
     pageNumber: number;
     color: string;
     createdAt: string;
-    x: number;
-    y: number;
-    author?: string;
-    isIsoAnnot?: boolean;
 }
 
 export interface TextMarkupAnnotation extends BaseAnnotation {
     toolType: "highlight" | "underline" | "strikethrough";
     text: string;
-    rectSegments: BoundingBox[];
+    rectSegments: Rect[];
     underlineStyle?: UnderlineStyle;
 }
 
@@ -46,12 +33,10 @@ export interface NoteAnnotation extends BaseAnnotation {
     contextSnippet?: string;
 }
 
-export interface CropAnnotation extends BaseAnnotation {
+export interface CropAnnotation extends BaseAnnotation, Dimensions {
     toolType: "area_select";
     imageUrl: string;
     caption?: string;
-    width: number;
-    height: number;
 }
 
 export type PdfAnnotation =
