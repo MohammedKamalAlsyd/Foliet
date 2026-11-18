@@ -50,6 +50,15 @@ export function SearchOverlay({
           ref={searchInputRef}
           value={searchQuery}
           onChange={(e) => onQueryChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.shiftKey ? onPrev() : onNext();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              onClose();
+            }
+          }}
           placeholder="Find in paper"
           className="h-8 w-52 pl-8 pr-2 text-xs"
         />

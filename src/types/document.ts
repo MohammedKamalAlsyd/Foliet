@@ -2,7 +2,9 @@
  * Foliet - Document Catalog, Navigation & IPC Types
  */
 import type { PdfAnnotation } from "./annotations";
-import type { ReadingPosition } from "./common";
+import type { Dimensions, ReadingPosition } from "./common";
+
+export type PageDimensions = Dimensions;
 
 export interface PdfOutlineNode {
     id: string;

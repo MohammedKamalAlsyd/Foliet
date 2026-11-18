@@ -7,6 +7,7 @@ import { RagService } from "@/services/rag";
 import { DocumentCatalogStorage } from "@/services/storage/catalog";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useDocumentStore } from "@/stores/documentStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import type { RagSearchResult, RagState } from "@/types/embedding";
 import { extractErrorMessage } from "@/utils/error";
 
@@ -116,6 +117,7 @@ export const useRagStore = create<RagStore>((set, get) => {
                 await DocumentCatalogStorage.updateDocument(docId, {
                     isIndexed: true,
                 }).catch(() => { });
+                useLibraryStore.getState().updateDocumentInStore(docId, { isIndexed: true });
                 useDocumentStore.getState().setDocumentIndexed(true);
             } catch (err) {
                 const message = extractErrorMessage(err, "Indexing failed.");
@@ -142,6 +144,7 @@ export const useRagStore = create<RagStore>((set, get) => {
                 await DocumentCatalogStorage.updateDocument(docId, {
                     isIndexed: false,
                 }).catch(() => { });
+                useLibraryStore.getState().updateDocumentInStore(docId, { isIndexed: false });
                 if (useDocumentStore.getState().activeDoc?.id === docId) {
                     useDocumentStore.getState().setDocumentIndexed(false);
                 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, PanelLeft, Plus, Search, Trash2 } from "lucide-react";
+import { tinykeys } from "tinykeys";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toast } from "sonner";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
@@ -81,14 +82,16 @@ export function LibraryView() {
   }, [openPdfPath]);
 
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    return tinykeys(window, {
+      "$mod+k": (e) => {
         e.preventDefault();
         searchRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+      },
+      "$mod+K": (e) => {
+        e.preventDefault();
+        searchRef.current?.focus();
+      },
+    });
   }, []);
 
   const counts = useMemo(() => {

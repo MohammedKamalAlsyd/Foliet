@@ -416,7 +416,7 @@ export const SummaryDocsEditor = forwardRef<
       CodeBlockLowlight.configure({
         lowlight,
         defaultLanguage: "plaintext",
-      }),
+      } as any),
       CropAwareImage.configure({
         inline: false,
         allowBase64: true,
@@ -618,15 +618,15 @@ export const SummaryDocsEditor = forwardRef<
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           <ToolbarButton
             label="Undo"
-            disabled={controlsDisabled || !editor?.can().undo()}
-            onClick={() => editor?.chain().focus().undo().run()}
+            disabled={controlsDisabled || !(editor?.can() as any)?.undo?.()}
+            onClick={() => (editor?.chain().focus() as any)?.undo?.().run()}
           >
             <Undo2 size={14} strokeWidth={1.5} />
           </ToolbarButton>
           <ToolbarButton
             label="Redo"
-            disabled={controlsDisabled || !editor?.can().redo()}
-            onClick={() => editor?.chain().focus().redo().run()}
+            disabled={controlsDisabled || !(editor?.can() as any)?.redo?.()}
+            onClick={() => (editor?.chain().focus() as any)?.redo?.().run()}
           >
             <Redo2 size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -638,7 +638,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 1 })}
             disabled={controlsDisabled}
             onClick={() =>
-              editor?.chain().focus().toggleHeading({ level: 1 }).run()
+              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 1 }).run()
             }
           >
             <Heading1 size={14} strokeWidth={1.5} />
@@ -648,7 +648,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 2 })}
             disabled={controlsDisabled}
             onClick={() =>
-              editor?.chain().focus().toggleHeading({ level: 2 }).run()
+              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 2 }).run()
             }
           >
             <Heading2 size={14} strokeWidth={1.5} />
@@ -658,7 +658,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 3 })}
             disabled={controlsDisabled}
             onClick={() =>
-              editor?.chain().focus().toggleHeading({ level: 3 }).run()
+              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 3 }).run()
             }
           >
             <Heading3 size={14} strokeWidth={1.5} />
@@ -670,7 +670,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Bold"
             isActive={editor?.isActive("bold")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleBold().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleBold?.().run()}
           >
             <Bold size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -678,7 +678,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Italic"
             isActive={editor?.isActive("italic")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleItalic().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleItalic?.().run()}
           >
             <Italic size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -689,7 +689,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Bullet List"
             isActive={editor?.isActive("bulletList")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleBulletList().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleBulletList?.().run()}
           >
             <List size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -697,7 +697,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Ordered List"
             isActive={editor?.isActive("orderedList")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleOrderedList().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleOrderedList?.().run()}
           >
             <ListOrdered size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -705,7 +705,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Blockquote"
             isActive={editor?.isActive("blockquote")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleBlockquote().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleBlockquote?.().run()}
           >
             <Quote size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -716,7 +716,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Inline Code"
             isActive={editor?.isActive("code")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleCode().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleCode?.().run()}
           >
             <Code size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -724,7 +724,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Code Block"
             isActive={editor?.isActive("codeBlock")}
             disabled={controlsDisabled}
-            onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
+            onClick={() => (editor?.chain().focus() as any)?.toggleCodeBlock?.().run()}
           >
             <FileCode size={14} strokeWidth={1.5} />
           </ToolbarButton>

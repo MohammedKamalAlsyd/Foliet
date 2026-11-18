@@ -7,8 +7,10 @@
  */
 
 import { DocumentDatabase } from "@/services/storage/database";
+import { useAnnotationStore } from "@/stores/annotationStore";
 import { isCropAnnotation, type CropAnnotation } from "@/types/annotations";
 import { formatCropMarkdown, resolveCropUri } from "@/utils/llmFormatting";
+import { waitForRenderedPage } from "@/utils/pdfDom";
 
 export interface CaptureFigureResult {
     crop: CropAnnotation;
@@ -17,43 +19,6 @@ export interface CaptureFigureResult {
 
 function normalizeText(s: string): string {
     return s.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-async function waitForRenderedPage(
-    pageNumber: number,
-    jumpToPage?: (page: number) => void,
-    timeoutMs = 1100,
-): Promise<HTMLElement | null> {
-    if (typeof document === "undefined") return null;
-
-    const findReady = () => {
-        const wrapper = document.querySelector(
-            `[data-page-number="${pageNumber}"]`,
-        ) as HTMLElement | null;
-        if (!wrapper) return null;
-        const canvas = wrapper.querySelector(
-            ".react-pdf__Page__canvas",
-        ) as HTMLCanvasElement | null;
-        if (canvas && canvas.width > 0 && canvas.height > 0) {
-            return wrapper;
-        }
-        return null;
-    };
-
-    const immediate = findReady();
-    if (immediate) return immediate;
-
-    jumpToPage?.(pageNumber);
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-        await new Promise((r) => setTimeout(r, 90));
-        const ready = findReady();
-        if (ready) return ready;
-    }
-
-    return document.querySelector(
-        `[data-page-number="${pageNumber}"]`,
-    ) as HTMLElement | null;
 }
 
 /**
@@ -216,13 +181,7 @@ export async function captureFigureCropFromPage(
         await DocumentDatabase.appendAnnotation(docId, crop);
     }
 
-    if (typeof window !== "undefined") {
-        window.dispatchEvent(
-            new CustomEvent("foliet:crop-saved", {
-                detail: { docId, crop },
-            }),
-        );
-    }
+    useAnnotationStore.getState().receiveCrop(crop, docId);
 
     return { crop, created: true };
 }

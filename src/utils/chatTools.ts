@@ -4,6 +4,7 @@ import {
 } from "@/services/figureCropper";
 import type { LlmToolCall } from "@/services/llm";
 import { DocumentDatabase } from "@/services/storage/database";
+import { useAnnotationStore } from "@/stores/annotationStore";
 import { useRagStore } from "@/stores/ragStore";
 import type { TextMarkupAnnotation } from "@/types/annotations";
 import type { ExecutedToolCall } from "@/types/chat";
@@ -104,13 +105,7 @@ export async function executeCopilotToolCall(
 
         await DocumentDatabase.appendAnnotation(context.docId, annotation);
 
-        if (typeof window !== "undefined") {
-            window.dispatchEvent(
-                new CustomEvent("foliet:annotation-saved", {
-                    detail: { docId: context.docId, annotation },
-                }),
-            );
-        }
+        useAnnotationStore.getState().receiveAnnotation(annotation, context.docId);
 
         context.jumpToPage?.(pageNumber);
         useRagStore.getState().setActiveRagHighlight({

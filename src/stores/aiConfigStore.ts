@@ -3,13 +3,14 @@
  */
 
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 import {
     DEFAULT_AI_SETTINGS,
     DEFAULT_RAG_HYPERPARAMETERS,
     EMBEDDING_PRESETS,
     LLM_PRESETS,
 } from "@/constants/models";
-import { SettingsStorage, type AiSettings } from "@/services/storage/settings";
+import { tauriSettingsStorage } from "@/services/storage/tauriStorage";
 import type { AiConfigState, LlmProvider } from "@/types/chat";
 import type {
     EmbeddingConfig,
@@ -48,128 +49,126 @@ const DEFAULT_API_KEYS: Record<LlmProvider, string> = {
     anthropic: "",
 };
 
-let initPromise: Promise<void> | null = null;
+export const useAiConfigStore = create<AiConfigStore>()(
+    persist(
+        (set, get) => ({
+            llmProvider: DEFAULT_AI_SETTINGS.llmProvider,
+            llmModel: DEFAULT_AI_SETTINGS.llmModel,
+            apiKeys: { ...DEFAULT_API_KEYS },
+            ollamaEndpoint: DEFAULT_AI_SETTINGS.ollamaEndpoint,
+            webSearchEnabled: DEFAULT_AI_SETTINGS.webSearchEnabled,
+            embeddingProvider: DEFAULT_AI_SETTINGS.embeddingProvider,
+            embeddingModel: DEFAULT_AI_SETTINGS.embeddingModel,
+            embeddingApiKey: DEFAULT_AI_SETTINGS.embeddingApiKey,
+            hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
 
-export const useAiConfigStore = create<AiConfigStore>((set, get) => {
-    const patchAndSave = async (patch: Partial<AiConfigState>) => {
-        set(patch);
-        await SettingsStorage.saveAiSettings(patch as Partial<AiSettings>);
-    };
+            getActiveEmbeddingConfig: () => {
+                const s = get();
+                return {
+                    provider: s.embeddingProvider,
+                    model: s.embeddingModel,
+                    apiKey: s.embeddingApiKey || undefined,
+                    endpoint: s.embeddingProvider === "ollama" ? s.ollamaEndpoint : undefined,
+                };
+            },
 
-    return {
-        llmProvider: DEFAULT_AI_SETTINGS.llmProvider,
-        llmModel: DEFAULT_AI_SETTINGS.llmModel,
-        apiKeys: { ...DEFAULT_API_KEYS },
-        ollamaEndpoint: DEFAULT_AI_SETTINGS.ollamaEndpoint,
-        webSearchEnabled: DEFAULT_AI_SETTINGS.webSearchEnabled,
-        embeddingProvider: DEFAULT_AI_SETTINGS.embeddingProvider,
-        embeddingModel: DEFAULT_AI_SETTINGS.embeddingModel,
-        embeddingApiKey: DEFAULT_AI_SETTINGS.embeddingApiKey,
-        hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
+            getActiveLlmConfig: () => {
+                const s = get();
+                return {
+                    provider: s.llmProvider,
+                    model: s.llmModel,
+                    apiKey: s.apiKeys[s.llmProvider] ?? "",
+                    ollamaEndpoint: s.ollamaEndpoint,
+                };
+            },
 
-        getActiveEmbeddingConfig: () => {
-            const s = get();
-            return {
-                provider: s.embeddingProvider,
-                model: s.embeddingModel,
-                apiKey: s.embeddingApiKey || undefined,
-                endpoint: s.embeddingProvider === "ollama" ? s.ollamaEndpoint : undefined,
-            };
+            initializeConfig: async () => {
+                // Handled automatically by Zustand persist rehydration
+            },
+
+            setLlmProvider: async (provider) => {
+                const presets = LLM_PRESETS[provider];
+                const llmModel =
+                    presets?.find((p) => p.isDefault)?.id ?? presets?.[0]?.id ?? get().llmModel;
+                set({ llmProvider: provider, llmModel });
+            },
+
+            setLlmModel: async (llmModel) => {
+                set({ llmModel });
+            },
+
+            setApiKey: async (provider, key) => {
+                set((state) => ({ apiKeys: { ...state.apiKeys, [provider]: key } }));
+            },
+
+            setOllamaEndpoint: async (ollamaEndpoint) => {
+                set({ ollamaEndpoint });
+            },
+
+            setWebSearchEnabled: async (webSearchEnabled) => {
+                set({ webSearchEnabled });
+            },
+
+            setEmbeddingProvider: async (provider) => {
+                const presets = EMBEDDING_PRESETS[provider];
+                const preset = presets?.find((p) => p.isDefault) ?? presets?.[0];
+                const embeddingModel = preset?.id ?? get().embeddingModel;
+                const hyperparameters = preset
+                    ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
+                    : get().hyperparameters;
+                set({
+                    embeddingProvider: provider,
+                    embeddingModel,
+                    hyperparameters,
+                });
+            },
+
+            setEmbeddingModel: async (embeddingModel) => {
+                const preset = EMBEDDING_PRESETS[get().embeddingProvider]?.find(
+                    (p) => p.id === embeddingModel,
+                );
+                const hyperparameters = preset
+                    ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
+                    : get().hyperparameters;
+                set({ embeddingModel, hyperparameters });
+            },
+
+            setEmbeddingApiKey: async (embeddingApiKey) => {
+                set({ embeddingApiKey });
+            },
+
+            setHyperparameters: async (patch) => {
+                set((state) => ({ hyperparameters: { ...state.hyperparameters, ...patch } }));
+            },
+
+            resetToDefaults: async () => {
+                set({
+                    llmProvider: DEFAULT_AI_SETTINGS.llmProvider,
+                    llmModel: DEFAULT_AI_SETTINGS.llmModel,
+                    apiKeys: { ...DEFAULT_API_KEYS },
+                    ollamaEndpoint: DEFAULT_AI_SETTINGS.ollamaEndpoint,
+                    webSearchEnabled: false,
+                    embeddingProvider: DEFAULT_AI_SETTINGS.embeddingProvider,
+                    embeddingModel: DEFAULT_AI_SETTINGS.embeddingModel,
+                    embeddingApiKey: DEFAULT_AI_SETTINGS.embeddingApiKey,
+                    hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
+                });
+            },
+        }),
+        {
+            name: "ai_settings",
+            storage: createJSONStorage(() => tauriSettingsStorage),
+            partialize: (state) => ({
+                llmProvider: state.llmProvider,
+                llmModel: state.llmModel,
+                apiKeys: state.apiKeys,
+                ollamaEndpoint: state.ollamaEndpoint,
+                webSearchEnabled: state.webSearchEnabled,
+                embeddingProvider: state.embeddingProvider,
+                embeddingModel: state.embeddingModel,
+                embeddingApiKey: state.embeddingApiKey,
+                hyperparameters: state.hyperparameters,
+            }),
         },
-
-        getActiveLlmConfig: () => {
-            const s = get();
-            return {
-                provider: s.llmProvider,
-                model: s.llmModel,
-                apiKey: s.apiKeys[s.llmProvider] ?? "",
-                ollamaEndpoint: s.ollamaEndpoint,
-            };
-        },
-
-        initializeConfig: () => {
-            if (!initPromise) {
-                initPromise = (async () => {
-                    try {
-                        const saved = await SettingsStorage.getAiSettings();
-                        set({
-                            llmProvider: saved.llmProvider,
-                            llmModel: saved.llmModel,
-                            apiKeys: { ...DEFAULT_API_KEYS, ...saved.apiKeys },
-                            ollamaEndpoint: saved.ollamaEndpoint,
-                            webSearchEnabled: Boolean(
-                                (saved as AiSettings & { webSearchEnabled?: boolean })
-                                    .webSearchEnabled,
-                            ),
-                            embeddingProvider: saved.embeddingProvider,
-                            embeddingModel: saved.embeddingModel,
-                            embeddingApiKey: saved.embeddingApiKey,
-                            hyperparameters: { ...saved.hyperparameters },
-                        });
-                    } catch (err) {
-                        console.warn("AiConfigStore: Failed to initialize settings:", err);
-                    }
-                })();
-            }
-            return initPromise;
-        },
-
-        setLlmProvider: async (provider) => {
-            const presets = LLM_PRESETS[provider];
-            const llmModel =
-                presets?.find((p) => p.isDefault)?.id ?? presets?.[0]?.id ?? get().llmModel;
-            await patchAndSave({ llmProvider: provider, llmModel });
-        },
-
-        setLlmModel: (llmModel) => patchAndSave({ llmModel }),
-        setApiKey: (provider, key) =>
-            patchAndSave({ apiKeys: { ...get().apiKeys, [provider]: key } }),
-        setOllamaEndpoint: (ollamaEndpoint) => patchAndSave({ ollamaEndpoint }),
-        setWebSearchEnabled: (webSearchEnabled) => patchAndSave({ webSearchEnabled }),
-
-        setEmbeddingProvider: async (provider) => {
-            const presets = EMBEDDING_PRESETS[provider];
-            const preset = presets?.find((p) => p.isDefault) ?? presets?.[0];
-            const embeddingModel = preset?.id ?? get().embeddingModel;
-            const hyperparameters = preset
-                ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
-                : get().hyperparameters;
-            await patchAndSave({
-                embeddingProvider: provider,
-                embeddingModel,
-                hyperparameters,
-            });
-        },
-
-        setEmbeddingModel: async (embeddingModel) => {
-            const preset = EMBEDDING_PRESETS[get().embeddingProvider]?.find(
-                (p) => p.id === embeddingModel,
-            );
-            const hyperparameters = preset
-                ? { ...get().hyperparameters, vectorDimension: preset.dimensions }
-                : get().hyperparameters;
-            await patchAndSave({ embeddingModel, hyperparameters });
-        },
-
-        setEmbeddingApiKey: (embeddingApiKey) => patchAndSave({ embeddingApiKey }),
-        setHyperparameters: (patch) =>
-            patchAndSave({ hyperparameters: { ...get().hyperparameters, ...patch } }),
-
-        resetToDefaults: async () => {
-            const defaults = await SettingsStorage.resetAiSettings();
-            set({
-                llmProvider: defaults.llmProvider,
-                llmModel: defaults.llmModel,
-                apiKeys: { ...DEFAULT_API_KEYS },
-                ollamaEndpoint: defaults.ollamaEndpoint,
-                webSearchEnabled: false,
-                embeddingProvider: defaults.embeddingProvider,
-                embeddingModel: defaults.embeddingModel,
-                embeddingApiKey: defaults.embeddingApiKey,
-                hyperparameters: { ...defaults.hyperparameters },
-            });
-        },
-    };
-});
-
-void useAiConfigStore.getState().initializeConfig();
+    ),
+);

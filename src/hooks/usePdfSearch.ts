@@ -1,4 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import { useDebouncedCallback } from "use-debounce";
+import { extractPdfPageText } from "@/utils/pdfDom";
 
 export function usePdfSearch(
     pdfProxy: any,
@@ -13,15 +15,45 @@ export function usePdfSearch(
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const cacheRef = useRef<Map<number, string>>(new Map());
     const runIdRef = useRef(0);
-    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const debouncedSearch = useDebouncedCallback(
+        async (clean: string, runId: number) => {
+            const matches: number[] = [];
+            try {
+                for (let p = 1; p <= pdfProxy.numPages; p++) {
+                    if (runIdRef.current !== runId) return;
+
+                    let pageText = cacheRef.current.get(p);
+                    if (pageText === undefined) {
+                        const extracted = await extractPdfPageText(pdfProxy, p);
+                        pageText = extracted.toLowerCase();
+                        cacheRef.current.set(p, pageText);
+                    }
+
+                    let pos = pageText.indexOf(clean);
+                    while (pos !== -1) {
+                        matches.push(p);
+                        pos = pageText.indexOf(clean, pos + clean.length);
+                    }
+                }
+
+                if (runIdRef.current !== runId) return;
+                setSearchResults(matches);
+                setCurrentMatchIndex(0);
+                if (matches.length > 0) onJumpToPage(matches[0]);
+            } catch (err) {
+                console.warn("Search error:", err);
+            } finally {
+                if (runIdRef.current === runId) setIsSearching(false);
+            }
+        },
+        160,
+    );
 
     const cancelPending = useCallback(() => {
-        if (debounceRef.current) {
-            clearTimeout(debounceRef.current);
-            debounceRef.current = null;
-        }
+        debouncedSearch.cancel();
         runIdRef.current++;
-    }, []);
+    }, [debouncedSearch]);
 
     useEffect(() => {
         cancelPending();
@@ -45,44 +77,9 @@ export function usePdfSearch(
 
             const runId = runIdRef.current;
             setIsSearching(true);
-
-            debounceRef.current = setTimeout(async () => {
-                const matches: number[] = [];
-                try {
-                    for (let p = 1; p <= pdfProxy.numPages; p++) {
-                        if (runIdRef.current !== runId) return;
-
-                        let pageText = cacheRef.current.get(p);
-                        if (pageText === undefined) {
-                            const page = await pdfProxy.getPage(p);
-                            const content = await page.getTextContent();
-                            const extracted: string = (content.items as Array<{ str?: string }>)
-                                .map((i) => i.str ?? "")
-                                .join(" ")
-                                .toLowerCase();
-                            cacheRef.current.set(p, extracted);
-                            pageText = extracted;
-                        }
-
-                        let pos = pageText.indexOf(clean);
-                        while (pos !== -1) {
-                            matches.push(p);
-                            pos = pageText.indexOf(clean, pos + clean.length);
-                        }
-                    }
-
-                    if (runIdRef.current !== runId) return;
-                    setSearchResults(matches);
-                    setCurrentMatchIndex(0);
-                    if (matches.length > 0) onJumpToPage(matches[0]);
-                } catch (err) {
-                    console.warn("Search error:", err);
-                } finally {
-                    if (runIdRef.current === runId) setIsSearching(false);
-                }
-            }, 160);
+            debouncedSearch(clean, runId);
         },
-        [pdfProxy, onJumpToPage, cancelPending],
+        [pdfProxy, cancelPending, debouncedSearch],
     );
 
     const stepMatch = useCallback(

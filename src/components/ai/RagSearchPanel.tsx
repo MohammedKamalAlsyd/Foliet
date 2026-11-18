@@ -81,8 +81,6 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
     isDeletingModel,
     downloadLocalModel,
     deleteLocalModel,
-    isInspectChunksMode,
-    setInspectChunksMode,
     inspectedChunks,
     isLoadingChunks,
     inspectChunksForDocument,
@@ -111,13 +109,13 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
       isDeletingModel: s.isDeletingModel,
       downloadLocalModel: s.downloadLocalModel,
       deleteLocalModel: s.deleteLocalModel,
-      isInspectChunksMode: s.isInspectChunksMode,
-      setInspectChunksMode: s.setInspectChunksMode,
       inspectedChunks: s.inspectedChunks,
       isLoadingChunks: s.isLoadingChunks,
       inspectChunksForDocument: s.inspectChunksForDocument,
     })),
   );
+
+  const [isInspectChunksMode, setInspectChunksMode] = useState(false);
 
   const {
     hyperparameters,

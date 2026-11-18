@@ -57,6 +57,70 @@ export function readDomPageText(pageNumber: number): string {
         .trim();
 }
 
+/**
+ * Extracts plain text directly from `pdfProxy` for a single page.
+ */
+export async function extractPdfPageText(
+    pdfProxy: any,
+    pageNumber: number,
+): Promise<string> {
+    if (!pdfProxy?.getPage) return "";
+    try {
+        const page = await pdfProxy.getPage(pageNumber);
+        const content = await page.getTextContent();
+        return (content?.items ?? [])
+            .map((it: any) => (typeof it?.str === "string" ? it.str : ""))
+            .join(" ")
+            .replace(/\s+/g, " ")
+            .trim();
+    } catch {
+        return "";
+    }
+}
+
+/**
+ * Waits for a page to be mounted and rendered in the DOM, optionally jumping to it.
+ */
+export async function waitForRenderedPage(
+    pageNumber: number,
+    jumpToPage?: (page: number) => void,
+    options?: { timeoutMs?: number; requireCanvas?: boolean },
+): Promise<HTMLElement | null> {
+    if (typeof document === "undefined") return null;
+    const timeoutMs = options?.timeoutMs ?? 1100;
+    const requireCanvas = options?.requireCanvas ?? true;
+
+    const findReady = () => {
+        const wrapper = document.querySelector(
+            `[data-page-number="${pageNumber}"]`,
+        ) as HTMLElement | null;
+        if (!wrapper) return null;
+        if (!requireCanvas) return wrapper;
+        const canvas = wrapper.querySelector(
+            ".react-pdf__Page__canvas",
+        ) as HTMLCanvasElement | null;
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
+            return wrapper;
+        }
+        return null;
+    };
+
+    const immediate = findReady();
+    if (immediate) return immediate;
+
+    jumpToPage?.(pageNumber);
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        await new Promise((r) => setTimeout(r, 90));
+        const ready = findReady();
+        if (ready) return ready;
+    }
+
+    return document.querySelector(
+        `[data-page-number="${pageNumber}"]`,
+    ) as HTMLElement | null;
+}
+
 export function readAnyRenderedPagesContext(): RagPromptContextItem[] {
     if (typeof document === "undefined") return [];
     const pages = Array.from(
@@ -109,8 +173,7 @@ export async function readPageContextText(
     if (immediateDom) return immediateDom.slice(0, 2200);
 
     if (jumpToPage) {
-        jumpToPage(pageNumber);
-        await new Promise((r) => setTimeout(r, 260));
+        await waitForRenderedPage(pageNumber, jumpToPage, { timeoutMs: 600, requireCanvas: false });
         const afterJumpDom = readDomPageText(pageNumber);
         if (afterJumpDom) return afterJumpDom.slice(0, 2200);
     }
@@ -234,8 +297,7 @@ export async function resolvePassageRects(
     }
 
     if (jumpToPage) {
-        jumpToPage(pageNumber);
-        await new Promise((r) => setTimeout(r, 260));
+        await waitForRenderedPage(pageNumber, jumpToPage, { timeoutMs: 600, requireCanvas: false });
         const retried = resolveDomTextRects(pageNumber, passageText);
         if (retried.length > 0) return retried;
     }

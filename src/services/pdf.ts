@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { BurnableAnnotation } from "@/types/annotations";
 import type { PdfChapter, PdfOpenResult, PdfOutlineNode } from "@/types/document";
+import { extractPdfPageText } from "@/utils/pdfDom";
 
 export const PDF_DOCUMENT_OPTIONS = {
     rangeChunkSize: 1_048_576,
@@ -238,29 +239,19 @@ export class PdfService {
         let totalLen = 0;
 
         for (let p = from; p <= to; p++) {
-            try {
-                const page = await pdfProxy.getPage(p);
-                const content = await page.getTextContent();
-                const pageText = (content?.items ?? [])
-                    .map((it: any) => (typeof it?.str === "string" ? it.str : ""))
-                    .join(" ")
-                    .replace(/\s+/g, " ")
-                    .trim();
-                if (!pageText) continue;
+            const pageText = await extractPdfPageText(pdfProxy, p);
+            if (!pageText) continue;
 
-                const block = `[Page ${p}]\n${pageText}`;
-                if (totalLen + block.length > maxChars) {
-                    const remaining = Math.max(0, maxChars - totalLen);
-                    if (remaining > 120) {
-                        parts.push(block.slice(0, remaining));
-                    }
-                    break;
+            const block = `[Page ${p}]\n${pageText}`;
+            if (totalLen + block.length > maxChars) {
+                const remaining = Math.max(0, maxChars - totalLen);
+                if (remaining > 120) {
+                    parts.push(block.slice(0, remaining));
                 }
-                parts.push(block);
-                totalLen += block.length + 2;
-            } catch {
-                // Skip unreadable page
+                break;
             }
+            parts.push(block);
+            totalLen += block.length + 2;
         }
 
         return parts.join("\n\n");

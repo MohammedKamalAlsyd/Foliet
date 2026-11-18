@@ -1,9 +1,11 @@
-import { LazyStore } from "@tauri-apps/plugin-store";
-import { ToolPreset } from "@/types/tools";
+import { DEFAULT_AI_SETTINGS, DEFAULT_RAG_HYPERPARAMETERS } from "@/constants/models";
 import { DEFAULT_TOOL_PRESETS } from "@/constants/tools";
-import { DEFAULT_RAG_HYPERPARAMETERS, DEFAULT_AI_SETTINGS } from "@/constants/models";
+import { useAiConfigStore } from "@/stores/aiConfigStore";
+import { useSystemStore } from "@/stores/systemStore";
+import { useToolStore } from "@/stores/toolStore";
 import type { LlmProvider } from "@/types/chat";
 import type { EmbeddingProvider, RagHyperparameters } from "@/types/embedding";
+import type { ToolPreset } from "@/types/tools";
 
 export interface UserPreferences {
     theme: "dark" | "light";
@@ -23,143 +25,83 @@ export interface AiSettings {
     hyperparameters: RagHyperparameters;
 }
 
-const DEFAULT_PREFERENCES: UserPreferences = {
-    theme: "light",
-    defaultZoom: 100,
-    sidebarOpen: true,
-};
-
 export class SettingsStorage {
-    private static store = new LazyStore("settings.json");
-
-    // =========================================================================
-    // User Preferences
-    // =========================================================================
-
     public static async getPreferences(): Promise<UserPreferences> {
-        try {
-            const prefs = await this.store.get<Partial<UserPreferences>>(
-                "user_preferences"
-            );
-            if (prefs) {
-                return { ...DEFAULT_PREFERENCES, ...prefs };
-            }
-        } catch (err) {
-            console.warn("SettingsStorage: Error reading preferences:", err);
-        }
-        return { ...DEFAULT_PREFERENCES };
+        const sys = useSystemStore.getState();
+        return {
+            theme: sys.theme,
+            defaultZoom: sys.defaultZoom ?? 100,
+            sidebarOpen: sys.sidebarOpen ?? true,
+        };
     }
 
     public static async savePreferences(
-        prefs: Partial<UserPreferences>
+        prefs: Partial<UserPreferences>,
     ): Promise<UserPreferences> {
-        const current = await this.getPreferences();
-        const next = { ...current, ...prefs };
-        await this.store.set("user_preferences", next);
-        await this.store.save();
-        return next;
-    }
-
-    public static async resetPreferences(): Promise<UserPreferences> {
-        const defaults = { ...DEFAULT_PREFERENCES };
-        await this.store.set("user_preferences", defaults);
-        await this.store.save();
-        return defaults;
+        const sys = useSystemStore.getState();
+        if (prefs.theme !== undefined) sys.setTheme(prefs.theme);
+        if (prefs.sidebarOpen !== undefined) sys.setSidebarOpen(prefs.sidebarOpen);
+        if (prefs.defaultZoom !== undefined) sys.setDefaultZoom(prefs.defaultZoom);
+        return this.getPreferences();
     }
 
     public static async getTheme(): Promise<"dark" | "light"> {
-        const prefs = await this.getPreferences();
-        return prefs.theme === "light" ? "light" : "dark";
+        return useSystemStore.getState().theme;
     }
 
     public static async setTheme(theme: "dark" | "light"): Promise<void> {
-        await this.savePreferences({ theme });
+        useSystemStore.getState().setTheme(theme);
     }
 
-    // =========================================================================
-    // Tool Presets
-    // =========================================================================
-
     public static async getToolPresets(): Promise<ToolPreset[]> {
-        try {
-            const saved = await this.store.get<ToolPreset[]>("tool_presets");
-            if (Array.isArray(saved) && saved.length > 0) {
-                return saved;
-            }
-        } catch (err) {
-            console.warn("SettingsStorage: Failed to read tool presets:", err);
-        }
-        return DEFAULT_TOOL_PRESETS;
+        return useToolStore.getState().presets;
     }
 
     public static async saveToolPresets(presets: ToolPreset[]): Promise<void> {
-        await this.store.set("tool_presets", presets);
-        await this.store.save();
+        useToolStore.setState({ presets });
     }
 
     public static async resetToolPresets(): Promise<ToolPreset[]> {
-        await this.saveToolPresets(DEFAULT_TOOL_PRESETS);
+        useToolStore.getState().resetPresets();
         return DEFAULT_TOOL_PRESETS;
     }
 
-    // =========================================================================
-    // AI & Embedding Settings
-    // =========================================================================
-
     public static async getAiSettings(): Promise<AiSettings> {
-        try {
-            const saved = await this.store.get<Partial<AiSettings>>("ai_settings");
-            if (saved) {
-                return {
-                    ...DEFAULT_AI_SETTINGS,
-                    ...saved,
-                    apiKeys: {
-                        ...DEFAULT_AI_SETTINGS.apiKeys,
-                        ...saved.apiKeys,
-                    },
-                    hyperparameters: {
-                        ...DEFAULT_AI_SETTINGS.hyperparameters,
-                        ...saved.hyperparameters,
-                    },
-                };
-            }
-        } catch (err) {
-            console.warn("SettingsStorage: Failed to read AI settings:", err);
+        const s = useAiConfigStore.getState();
+        return {
+            llmProvider: s.llmProvider,
+            llmModel: s.llmModel,
+            apiKeys: s.apiKeys,
+            ollamaEndpoint: s.ollamaEndpoint,
+            webSearchEnabled: s.webSearchEnabled,
+            embeddingProvider: s.embeddingProvider,
+            embeddingModel: s.embeddingModel,
+            embeddingApiKey: s.embeddingApiKey,
+            hyperparameters: s.hyperparameters,
+        };
+    }
+
+    public static async saveAiSettings(
+        patch: Partial<AiSettings>,
+    ): Promise<AiSettings> {
+        if (patch.apiKeys) {
+            const currentKeys = useAiConfigStore.getState().apiKeys;
+            useAiConfigStore.setState({
+                ...patch,
+                apiKeys: { ...currentKeys, ...patch.apiKeys },
+            });
+        } else {
+            useAiConfigStore.setState(patch as any);
         }
+        return this.getAiSettings();
+    }
+
+    public static async resetAiSettings(): Promise<AiSettings> {
+        await useAiConfigStore.getState().resetToDefaults();
         return {
             ...DEFAULT_AI_SETTINGS,
             apiKeys: {},
             hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
         };
-    }
-
-    public static async saveAiSettings(
-        patch: Partial<AiSettings>
-    ): Promise<AiSettings> {
-        const current = await this.getAiSettings();
-        const next: AiSettings = {
-            ...current,
-            ...patch,
-            apiKeys: patch.apiKeys
-                ? { ...current.apiKeys, ...patch.apiKeys }
-                : current.apiKeys,
-            hyperparameters: patch.hyperparameters
-                ? { ...current.hyperparameters, ...patch.hyperparameters }
-                : current.hyperparameters,
-        };
-        await this.store.set("ai_settings", next);
-        await this.store.save();
-        return next;
-    }
-
-    public static async resetAiSettings(): Promise<AiSettings> {
-        const defaults: AiSettings = {
-            ...DEFAULT_AI_SETTINGS,
-            apiKeys: {},
-            hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
-        };
-        await this.store.set("ai_settings", defaults);
-        await this.store.save();
-        return defaults;
     }
 }

@@ -100,12 +100,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     selectedChapterId,
     setSelectedChapterId,
     generationProgress,
-    includeNotes,
-    setIncludeNotes,
-    includeChats,
-    setIncludeChats,
-    summaryWebSearch,
-    setSummaryWebSearch,
     updateActiveSummaryLocal,
     loadSummary,
     restorePreviousSummary,
@@ -127,12 +121,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       selectedChapterId: s.selectedChapterId,
       setSelectedChapterId: s.setSelectedChapterId,
       generationProgress: s.generationProgress,
-      includeNotes: s.includeNotes,
-      setIncludeNotes: s.setIncludeNotes,
-      includeChats: s.includeChats,
-      setIncludeChats: s.setIncludeChats,
-      summaryWebSearch: s.summaryWebSearch,
-      setSummaryWebSearch: s.setSummaryWebSearch,
       updateActiveSummaryLocal: s.updateActiveSummaryLocal,
       loadSummary: s.loadSummary,
       restorePreviousSummary: s.restorePreviousSummary,
@@ -142,6 +130,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       cancelSummaryStreaming: s.cancelSummaryStreaming,
     })),
   );
+
+  const [includeNotes, setIncludeNotes] = useState(false);
+  const [includeChats, setIncludeChats] = useState(false);
+  const [summaryWebSearch, setSummaryWebSearch] = useState(false);
 
   const { conversations, loadConversations } = useChatStore(
     useShallow((s) => ({
