@@ -8,7 +8,6 @@ import type {
     VisionImageInput,
 } from "@/services/llm";
 import { PdfService } from "@/services/pdf";
-import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
 import {
     isCropAnnotation,
@@ -17,6 +16,8 @@ import {
     type PdfAnnotation,
 } from "@/types/annotations";
 import type { ChatConversation } from "@/types/chat";
+import { formatCropMarkdown, resolveCropUri } from "@/utils/llmFormatting";
+import { getPageRagChunks } from "@/utils/pdfDom";
 
 export interface AiSummaryState {
     content: string;
@@ -143,7 +144,7 @@ export function collectRangeContext(
             crops.push({
                 id: a.id,
                 pageNumber: a.pageNumber,
-                imageUrl: a.imageUrl.startsWith("idb://") ? a.imageUrl : `idb://${a.id}`,
+                imageUrl: resolveCropUri(a.id, a.imageUrl),
                 caption: a.caption,
             });
         } else if (options.includeNotes) {
@@ -190,20 +191,12 @@ export async function fetchRangeText(
     startPage: number,
     endPage: number,
 ): Promise<string> {
-    try {
-        const chunks = await RagService.getDocumentChunks(docId);
-        const rangeChunks = chunks
-            .filter((c) => c.pageNumber >= startPage && c.pageNumber <= endPage)
-            .sort((a, b) => a.pageNumber - b.pageNumber || a.chunkIndex - b.chunkIndex);
-
-        if (rangeChunks.length > 0) {
-            return rangeChunks
-                .map((c) => `[Page ${c.pageNumber}] ${c.text.trim()}`)
-                .join("\n\n")
-                .slice(0, 20_000);
-        }
-    } catch {
-        // Fall back to direct PDF text extraction below
+    const rangeChunks = await getPageRagChunks(docId, startPage, endPage);
+    if (rangeChunks.length > 0) {
+        return rangeChunks
+            .map((c) => `[Page ${c.pageNumber}] ${c.text.trim()}`)
+            .join("\n\n")
+            .slice(0, 20_000);
     }
 
     return PdfService.extractPageRangeText(pdfProxy, startPage, endPage, 18_000);
@@ -269,16 +262,14 @@ export async function executeSummaryToolCalls(
                 jumpToPage: context.jumpToPage,
             });
             if (captured) {
-                const uri = captured.crop.imageUrl.startsWith("idb://")
-                    ? captured.crop.imageUrl
-                    : `idb://${captured.crop.id}`;
+                const uri = resolveCropUri(captured.crop.id, captured.crop.imageUrl);
                 const alt = captured.crop.caption || `Figure (Page ${pageNum})`;
                 const dataUrl = await DocumentDatabase.getFigureCrop(uri);
                 if (dataUrl) {
                     extraVision.push({ dataUrl, caption: `Page ${pageNum}: ${alt}` });
                 }
                 toolResults.push(
-                    `Captured figure on Page ${pageNum}. Embed it in the updated Markdown using: ![${alt}](${uri})`,
+                    `Captured figure on Page ${pageNum}. Embed it in the updated Markdown using: ${formatCropMarkdown(alt, captured.crop.id, uri)}`,
                 );
             } else {
                 toolResults.push(`Could not capture figure on Page ${pageNum}.`);

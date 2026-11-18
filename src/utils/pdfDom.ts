@@ -1,6 +1,7 @@
 import type { RagPromptContextItem } from "@/services/llm";
 import { RagService } from "@/services/rag";
 import type { Rect } from "@/types/common";
+import type { DocumentChunk } from "@/types/embedding";
 
 export function mergeLineRects(rects: Rect[]): Rect[] {
     if (rects.length <= 1) return rects;
@@ -74,25 +75,34 @@ export function readAnyRenderedPagesContext(): RagPromptContextItem[] {
     return items;
 }
 
+export async function getPageRagChunks(
+    docId: string | undefined,
+    startPage: number,
+    endPage = startPage,
+): Promise<DocumentChunk[]> {
+    if (!docId) return [];
+    try {
+        const chunks = await RagService.getDocumentChunks(docId);
+        return chunks
+            .filter((c) => c.pageNumber >= startPage && c.pageNumber <= endPage)
+            .sort((a, b) => a.pageNumber - b.pageNumber || a.chunkIndex - b.chunkIndex);
+    } catch {
+        return [];
+    }
+}
+
 export async function readPageContextText(
     docId: string | undefined,
     pageNumber: number,
     jumpToPage?: (page: number) => void,
 ): Promise<string> {
-    if (docId) {
-        try {
-            const chunks = await RagService.getDocumentChunks(docId);
-            const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
-            if (pageChunks.length > 0) {
-                return pageChunks
-                    .slice(0, 3)
-                    .map((c) => c.text)
-                    .join("\n\n")
-                    .slice(0, 2200);
-            }
-        } catch {
-            // Fall through to DOM textLayer
-        }
+    const pageChunks = await getPageRagChunks(docId, pageNumber);
+    if (pageChunks.length > 0) {
+        return pageChunks
+            .slice(0, 3)
+            .map((c) => c.text)
+            .join("\n\n")
+            .slice(0, 2200);
     }
 
     const immediateDom = readDomPageText(pageNumber);
@@ -213,19 +223,14 @@ export async function resolvePassageRects(
     const domRects = resolveDomTextRects(pageNumber, passageText);
     if (domRects.length > 0) return domRects;
 
-    if (docId) {
-        try {
-            const chunks = await RagService.getDocumentChunks(docId);
-            const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
-            const needle = passageText.toLowerCase().replace(/\s+/g, " ").trim();
-            const matched =
-                pageChunks.find((c) =>
-                    c.text.toLowerCase().replace(/\s+/g, " ").includes(needle.slice(0, 60)),
-                ) ?? pageChunks[0];
-            if (matched?.rectSegments?.length) return matched.rectSegments;
-        } catch {
-            // Fall through to jump + DOM retry
-        }
+    const pageChunks = await getPageRagChunks(docId, pageNumber);
+    if (pageChunks.length > 0) {
+        const needle = passageText.toLowerCase().replace(/\s+/g, " ").trim();
+        const matched =
+            pageChunks.find((c) =>
+                c.text.toLowerCase().replace(/\s+/g, " ").includes(needle.slice(0, 60)),
+            ) ?? pageChunks[0];
+        if (matched?.rectSegments?.length) return matched.rectSegments;
     }
 
     if (jumpToPage) {

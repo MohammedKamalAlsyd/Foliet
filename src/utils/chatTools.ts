@@ -3,13 +3,16 @@ import {
     insertFigureIntoSummary,
 } from "@/services/figureCropper";
 import type { LlmToolCall } from "@/services/llm";
-import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
-import { useDocumentStore } from "@/stores/documentStore";
 import { useRagStore } from "@/stores/ragStore";
 import type { TextMarkupAnnotation } from "@/types/annotations";
 import type { ExecutedToolCall } from "@/types/chat";
-import { readPageContextText, resolvePassageRects } from "@/utils/pdfDom";
+import { formatCropMarkdown } from "@/utils/llmFormatting";
+import {
+    getPageRagChunks,
+    readPageContextText,
+    resolvePassageRects,
+} from "@/utils/pdfDom";
 
 export interface CopilotToolContext {
     docId?: string;
@@ -101,15 +104,6 @@ export async function executeCopilotToolCall(
 
         await DocumentDatabase.appendAnnotation(context.docId, annotation);
 
-        const docStoreAny = useDocumentStore.getState() as unknown as {
-            addAnnotation?: (a: TextMarkupAnnotation) => void;
-            loadAnnotations?: (docId: string) => Promise<void>;
-        };
-        if (typeof docStoreAny.addAnnotation === "function") {
-            docStoreAny.addAnnotation(annotation);
-        } else if (typeof docStoreAny.loadAnnotations === "function") {
-            void docStoreAny.loadAnnotations(context.docId);
-        }
         if (typeof window !== "undefined") {
             window.dispatchEvent(
                 new CustomEvent("foliet:annotation-saved", {
@@ -144,35 +138,28 @@ export async function executeCopilotToolCall(
         const caption = typeof args.caption === "string" ? args.caption.trim() : "";
 
         let pageContext = "";
-        if (context.docId) {
-            try {
-                const chunks = await RagService.getDocumentChunks(context.docId);
-                const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
-                if (pageChunks.length > 0) {
-                    const matched =
-                        (caption &&
-                            pageChunks.find((c) =>
-                                c.text.toLowerCase().includes(caption.toLowerCase()),
-                            )) ||
-                        pageChunks[0];
-                    useRagStore.getState().setActiveRagHighlight({
-                        chunkId: matched.chunkId,
-                        docId: context.docId,
-                        docTitle: context.docTitle || "Document",
-                        pageNumber,
-                        text: matched.text,
-                        similarityScore: 1.0,
-                        rectSegments: matched.rectSegments,
-                    });
-                    pageContext = pageChunks
-                        .slice(0, 2)
-                        .map((c) => c.text)
-                        .join("\n\n")
-                        .slice(0, 1800);
-                }
-            } catch {
-                // Fall back to DOM textLayer
-            }
+        const pageChunks = await getPageRagChunks(context.docId, pageNumber);
+        if (pageChunks.length > 0 && context.docId) {
+            const matched =
+                (caption &&
+                    pageChunks.find((c) =>
+                        c.text.toLowerCase().includes(caption.toLowerCase()),
+                    )) ||
+                pageChunks[0];
+            useRagStore.getState().setActiveRagHighlight({
+                chunkId: matched.chunkId,
+                docId: context.docId,
+                docTitle: context.docTitle || "Document",
+                pageNumber,
+                text: matched.text,
+                similarityScore: 1.0,
+                rectSegments: matched.rectSegments,
+            });
+            pageContext = pageChunks
+                .slice(0, 2)
+                .map((c) => c.text)
+                .join("\n\n")
+                .slice(0, 1800);
         }
 
         if (!pageContext) {
@@ -215,10 +202,12 @@ export async function executeCopilotToolCall(
         }
 
         await insertFigureIntoSummary(captured.crop, context.docId);
-        const uri = captured.crop.imageUrl.startsWith("idb://")
-            ? captured.crop.imageUrl
-            : `idb://${captured.crop.id}`;
         const label = captured.crop.caption || `Figure (Page ${pageNumber})`;
+        const mdImage = formatCropMarkdown(
+            label,
+            captured.crop.id,
+            captured.crop.imageUrl,
+        );
 
         return {
             id: call.id,
@@ -226,7 +215,7 @@ export async function executeCopilotToolCall(
             arguments: { pageNumber, caption },
             status: "success",
             badgeLabel: `📎 Added figure from Page ${pageNumber} to Summary`,
-            result: `Inserted ![${label}](${uri}) into the active summary (${captured.created ? "newly captured from page canvas" : "reused existing crop"}).`,
+            result: `Inserted ${mdImage} into the active summary (${captured.created ? "newly captured from page canvas" : "reused existing crop"}).`,
         };
     }
 

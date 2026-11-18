@@ -66,41 +66,57 @@ export class DocumentDatabase {
         return this.dbPromise;
     }
 
-    // =========================================================================
-    // Annotations
-    // =========================================================================
-
-    public static async getAnnotations(docId: string): Promise<PdfAnnotation[]> {
+    private static async getJsonArray<T>(
+        table: "doc_annotations" | "doc_bookmarks",
+        docId: string,
+        label: string,
+    ): Promise<T[]> {
         try {
             const db = await this.getDb();
             const rows = await db.select<JsonRow[]>(
-                "SELECT data FROM doc_annotations WHERE doc_id = $1",
-                [docId]
+                `SELECT data FROM ${table} WHERE doc_id = $1`,
+                [docId],
             );
             if (!rows[0]?.data) return [];
             const parsed = JSON.parse(rows[0].data);
             return Array.isArray(parsed) ? parsed : [];
         } catch (err) {
-            console.warn("DocumentDatabase: Failed to read annotations:", err);
+            console.warn(`DocumentDatabase: Failed to read ${label}:`, err);
             return [];
         }
     }
 
-    public static async saveAnnotations(
+    private static async saveJsonArray<T>(
+        table: "doc_annotations" | "doc_bookmarks",
         docId: string,
-        annots: PdfAnnotation[]
+        items: T[],
     ): Promise<void> {
         const db = await this.getDb();
         await db.execute(
-            `INSERT OR REPLACE INTO doc_annotations (doc_id, data, updated_at)
+            `INSERT OR REPLACE INTO ${table} (doc_id, data, updated_at)
              VALUES ($1, $2, $3)`,
-            [docId, JSON.stringify(annots), Date.now()]
+            [docId, JSON.stringify(items), Date.now()],
         );
+    }
+
+    // =========================================================================
+    // Annotations
+    // =========================================================================
+
+    public static getAnnotations(docId: string): Promise<PdfAnnotation[]> {
+        return this.getJsonArray<PdfAnnotation>("doc_annotations", docId, "annotations");
+    }
+
+    public static saveAnnotations(
+        docId: string,
+        annots: PdfAnnotation[],
+    ): Promise<void> {
+        return this.saveJsonArray("doc_annotations", docId, annots);
     }
 
     public static async appendAnnotation(
         docId: string,
-        annotation: PdfAnnotation
+        annotation: PdfAnnotation,
     ): Promise<void> {
         const current = await this.getAnnotations(docId);
         const next = [
@@ -112,7 +128,7 @@ export class DocumentDatabase {
 
     public static async removeAnnotation(
         docId: string,
-        annotationId: string
+        annotationId: string,
     ): Promise<void> {
         const current = await this.getAnnotations(docId);
         const next = current.filter((a) => a.id !== annotationId);
@@ -130,32 +146,15 @@ export class DocumentDatabase {
     // Bookmarks
     // =========================================================================
 
-    public static async getBookmarks(docId: string): Promise<BookmarkItem[]> {
-        try {
-            const db = await this.getDb();
-            const rows = await db.select<JsonRow[]>(
-                "SELECT data FROM doc_bookmarks WHERE doc_id = $1",
-                [docId]
-            );
-            if (!rows[0]?.data) return [];
-            const parsed = JSON.parse(rows[0].data);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (err) {
-            console.warn("DocumentDatabase: Failed to read bookmarks:", err);
-            return [];
-        }
+    public static getBookmarks(docId: string): Promise<BookmarkItem[]> {
+        return this.getJsonArray<BookmarkItem>("doc_bookmarks", docId, "bookmarks");
     }
 
-    public static async saveBookmarks(
+    public static saveBookmarks(
         docId: string,
-        bookmarks: BookmarkItem[]
+        bookmarks: BookmarkItem[],
     ): Promise<void> {
-        const db = await this.getDb();
-        await db.execute(
-            `INSERT OR REPLACE INTO doc_bookmarks (doc_id, data, updated_at)
-             VALUES ($1, $2, $3)`,
-            [docId, JSON.stringify(bookmarks), Date.now()]
-        );
+        return this.saveJsonArray("doc_bookmarks", docId, bookmarks);
     }
 
     public static async deleteBookmarks(docId: string): Promise<void> {
@@ -170,13 +169,13 @@ export class DocumentDatabase {
     public static async saveFigureCrop(
         id: string,
         base64: string,
-        docId?: string
+        docId?: string,
     ): Promise<void> {
         const db = await this.getDb();
         await db.execute(
             `INSERT OR REPLACE INTO figure_crops (id, doc_id, data, created_at)
              VALUES ($1, $2, $3, $4)`,
-            [this.normalizeCropId(id), docId ?? null, base64, Date.now()]
+            [this.normalizeCropId(id), docId ?? null, base64, Date.now()],
         );
     }
 
@@ -185,7 +184,7 @@ export class DocumentDatabase {
             const db = await this.getDb();
             const rows = await db.select<JsonRow[]>(
                 "SELECT data FROM figure_crops WHERE id = $1",
-                [this.normalizeCropId(id)]
+                [this.normalizeCropId(id)],
             );
             return rows[0]?.data ?? null;
         } catch (err) {
@@ -206,7 +205,7 @@ export class DocumentDatabase {
     // =========================================================================
 
     public static async getConversations(
-        docId?: string
+        docId?: string,
     ): Promise<ChatConversation[]> {
         try {
             const db = await this.getDb();
@@ -223,10 +222,10 @@ export class DocumentDatabase {
                 docId !== undefined
                     ? await db.select<ChatRow[]>(
                         "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations WHERE doc_id = $1 ORDER BY updated_at DESC",
-                        [docId]
+                        [docId],
                     )
                     : await db.select<ChatRow[]>(
-                        "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations ORDER BY updated_at DESC"
+                        "SELECT id, doc_id, title, data, created_at, updated_at FROM chat_conversations ORDER BY updated_at DESC",
                     );
 
             return rows.map((row) => {
@@ -268,7 +267,7 @@ export class DocumentDatabase {
                 JSON.stringify(conv.messages ?? []),
                 conv.createdAt,
                 conv.updatedAt,
-            ]
+            ],
         );
     }
 
@@ -282,7 +281,7 @@ export class DocumentDatabase {
     // =========================================================================
 
     public static async getSummary(
-        docId: string
+        docId: string,
     ): Promise<{ content: string; sourceSnapshot?: string; updatedAt: number } | null> {
         try {
             const db = await this.getDb();
@@ -294,7 +293,7 @@ export class DocumentDatabase {
             }
             const rows = await db.select<SummaryRow[]>(
                 "SELECT doc_id, content, source_snapshot, updated_at FROM doc_summaries WHERE doc_id = $1",
-                [docId]
+                [docId],
             );
             if (!rows[0]) return null;
             return {
@@ -311,13 +310,13 @@ export class DocumentDatabase {
     public static async saveSummary(
         docId: string,
         content: string,
-        sourceSnapshot?: string
+        sourceSnapshot?: string,
     ): Promise<void> {
         const db = await this.getDb();
         await db.execute(
             `INSERT OR REPLACE INTO doc_summaries (doc_id, content, source_snapshot, updated_at)
              VALUES ($1, $2, $3, $4)`,
-            [docId, content, sourceSnapshot ?? null, Date.now()]
+            [docId, content, sourceSnapshot ?? null, Date.now()],
         );
     }
 
@@ -338,7 +337,7 @@ export class DocumentDatabase {
              DELETE FROM figure_crops WHERE doc_id = $1;
              DELETE FROM chat_conversations WHERE doc_id = $1;
              DELETE FROM doc_summaries WHERE doc_id = $1;`,
-            [docId]
+            [docId],
         );
     }
 

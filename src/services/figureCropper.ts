@@ -8,6 +8,7 @@
 
 import { DocumentDatabase } from "@/services/storage/database";
 import { isCropAnnotation, type CropAnnotation } from "@/types/annotations";
+import { formatCropMarkdown, resolveCropUri } from "@/utils/llmFormatting";
 
 export interface CaptureFigureResult {
     crop: CropAnnotation;
@@ -233,9 +234,7 @@ export async function insertFigureIntoSummary(
     crop: CropAnnotation,
     docId?: string,
 ): Promise<void> {
-    const src = crop.imageUrl.startsWith("idb://")
-        ? crop.imageUrl
-        : `idb://${crop.id}`;
+    const src = resolveCropUri(crop.id, crop.imageUrl);
     const alt = crop.caption?.trim() || `Figure (Page ${crop.pageNumber})`;
 
     let handledByLiveEditor = false;
@@ -249,7 +248,7 @@ export async function insertFigureIntoSummary(
 
     if (!handledByLiveEditor && docId) {
         const existing = await DocumentDatabase.getSummary(docId);
-        const mdImage = `![${alt}](${src})`;
+        const mdImage = formatCropMarkdown(alt, crop.id, src);
         const currContent = existing?.content ?? "";
         if (!currContent.includes(src)) {
             const nextContent = currContent.trim()

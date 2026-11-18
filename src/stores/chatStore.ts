@@ -20,7 +20,11 @@ import type {
     ExecutedToolCall,
 } from "@/types/chat";
 import { executeCopilotToolCall } from "@/utils/chatTools";
-import { isAbortError } from "@/utils/error";
+import {
+    formatStreamErrorOutput,
+    formatToolResultsPrompt,
+    formatUserPromptWithSelection,
+} from "@/utils/llmFormatting";
 import { readAnyRenderedPagesContext } from "@/utils/pdfDom";
 
 export interface ChatStore {
@@ -61,7 +65,18 @@ async function resolveChatSystemPrompt(params: {
     const aiConfig = useAiConfigStore.getState();
     const searchScope = useRagStore.getState().searchScope;
     const targetDocId = searchScope === "current" ? params.activeDocId : undefined;
-    let citations: CitationReference[] = [];
+
+    const toCitation = (
+        item: { chunkId: string; pageNumber: number; text: string },
+        docId: string,
+        docTitle: string,
+    ): CitationReference => ({
+        chunkId: item.chunkId,
+        docId,
+        docTitle,
+        pageNumber: item.pageNumber,
+        snippet: item.text.slice(0, 200),
+    });
 
     if (params.useRag) {
         try {
@@ -76,20 +91,15 @@ async function resolveChatSystemPrompt(params: {
             );
 
             if (ragResults.length > 0) {
-                citations = ragResults.map((r) => ({
-                    chunkId: r.chunkId,
-                    docId: r.docId,
-                    docTitle: r.docTitle,
-                    pageNumber: r.pageNumber,
-                    snippet: r.text.slice(0, 200),
-                }));
                 return {
                     systemPrompt: LlmService.buildRagSystemPrompt(
                         ragResults,
                         params.activeDocTitle,
                         true,
                     ),
-                    citations,
+                    citations: ragResults.map((r) =>
+                        toCitation(r, r.docId, r.docTitle),
+                    ),
                 };
             }
 
@@ -98,13 +108,6 @@ async function resolveChatSystemPrompt(params: {
                     await RagService.getDocumentChunks(params.activeDocId).catch(() => [])
                 ).slice(0, 5);
                 if (openingChunks.length > 0) {
-                    citations = openingChunks.map((c) => ({
-                        chunkId: c.chunkId,
-                        docId: params.activeDocId!,
-                        docTitle: params.activeDocTitle,
-                        pageNumber: c.pageNumber,
-                        snippet: c.text.slice(0, 200),
-                    }));
                     return {
                         systemPrompt: LlmService.buildRagSystemPrompt(
                             openingChunks.map((c) => ({
@@ -115,7 +118,9 @@ async function resolveChatSystemPrompt(params: {
                             params.activeDocTitle,
                             true,
                         ),
-                        citations,
+                        citations: openingChunks.map((c) =>
+                            toCitation(c, params.activeDocId!, params.activeDocTitle),
+                        ),
                     };
                 }
             }
@@ -136,7 +141,7 @@ async function resolveChatSystemPrompt(params: {
                 params.activeDocTitle,
                 true,
             ),
-            citations,
+            citations: [],
         };
     }
 
@@ -146,7 +151,7 @@ async function resolveChatSystemPrompt(params: {
 
     return {
         systemPrompt: `You are Foliet's scholarly research assistant (Lio). The user has "${params.activeDocTitle}" open in the PDF viewer. ${fallbackHint}`,
-        citations,
+        citations: [],
     };
 }
 
@@ -243,9 +248,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         const userMsg: ChatMessage = {
             id: crypto.randomUUID(),
             role: "user",
-            content: pendingSnippet
-                ? `[Selected from Page ${pendingSnippet.pageNumber}: "${pendingSnippet.snippet}"]\n\n${text}`
-                : text,
+            content: formatUserPromptWithSelection(text, pendingSnippet),
             timestamp: Date.now(),
             citations: pendingSnippet ? [pendingSnippet] : undefined,
         };
@@ -346,6 +349,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
             for (let round = 0; round < maxToolRounds; round++) {
                 let pendingToolCalls: LlmToolCall[] = [];
+                let roundText = "";
                 const isLastRound = round + 1 >= maxToolRounds;
 
                 await LlmService.streamChat({
@@ -359,6 +363,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                         pendingToolCalls = calls;
                     },
                     onChunk: (chunk) => {
+                        roundText += chunk;
                         accumulatedText += chunk;
                         patchAssistant({ content: accumulatedText });
                     },
@@ -387,13 +392,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 if (!needsFollowUp || isLastRound) break;
 
                 conversationMessages = [
-                    ...messagesWithUser,
-                    ...(accumulatedText.trim()
+                    ...conversationMessages,
+                    ...(roundText.trim()
                         ? [
                             {
-                                id: assistantId,
+                                id: crypto.randomUUID(),
                                 role: "assistant" as const,
-                                content: accumulatedText,
+                                content: roundText,
                                 timestamp: Date.now(),
                             },
                         ]
@@ -401,25 +406,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     {
                         id: crypto.randomUUID(),
                         role: "user",
-                        content: [
-                            "<tool_execution_results>",
-                            ...roundExecuted.map((t) => `Tool: ${t.name}\nOutcome: ${t.result}`),
-                            "</tool_execution_results>",
+                        content: formatToolResultsPrompt(
+                            roundExecuted.map((t) => `Tool: ${t.name}\nOutcome: ${t.result}`),
                             "Now answer the user's question directly in clear scholarly prose using the retrieved page content above. Do NOT print `[Executed Tools]` or raw JSON tool calls.",
-                        ].join("\n\n"),
+                        ),
                         timestamp: Date.now(),
                     },
                 ];
             }
 
             await finalizeMessage(accumulatedText);
-        } catch (err: any) {
-            const finalContent = isAbortError(err, abortController.signal)
-                ? accumulatedText
-                : accumulatedText.length > 0
-                    ? `${accumulatedText}\n\n[Generation stopped: ${err?.message || "Unknown error"}]`
-                    : `[Error: ${err?.message || "Generation failed"}]`;
-            await finalizeMessage(finalContent);
+        } catch (err) {
+            await finalizeMessage(
+                formatStreamErrorOutput(accumulatedText, err, abortController.signal),
+            );
         } finally {
             if (activeAbortController === abortController) {
                 activeAbortController = null;
