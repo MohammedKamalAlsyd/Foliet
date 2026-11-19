@@ -61,7 +61,9 @@ describe("Viewer annotations, notes, eraser & undo/redo workflow", () => {
     await user.click(
       screen.getByRole("button", { name: "Choose annotation tool" }),
     );
-    await user.click(await screen.findByText("Yellow Highlight"));
+    await user.click(
+      await screen.findByRole("menuitem", { name: /Yellow Highlight/i }),
+    );
     expect(useToolStore.getState().activeState.toolType).toBe("highlight");
 
     selectTextInElement(page1, "Dense semantic retrieval");
@@ -82,7 +84,9 @@ describe("Viewer annotations, notes, eraser & undo/redo workflow", () => {
     await user.click(
       screen.getByRole("button", { name: "Choose annotation tool" }),
     );
-    await user.click(await screen.findByText("Green Underline"));
+    await user.click(
+      await screen.findByRole("menuitem", { name: /Green Underline/i }),
+    );
     expect(useToolStore.getState().activeState.toolType).toBe("underline");
 
     await user.click(screen.getByRole("button", { name: "Tool style options" }));
@@ -108,7 +112,7 @@ describe("Viewer annotations, notes, eraser & undo/redo workflow", () => {
     await user.click(
       screen.getByRole("button", { name: "Choose annotation tool" }),
     );
-    await user.click(await screen.findByText("Pen"));
+    await user.click(await screen.findByRole("menuitem", { name: /Pen/i }));
     expect(useToolStore.getState().activeState.toolType).toBe("freehand_write");
 
     await user.click(screen.getByRole("button", { name: "Tool style options" }));
