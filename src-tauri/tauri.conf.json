@@ -43,7 +43,10 @@
         "mimeType": "application/pdf",
         "role": "Viewer"
       }
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.4"
+    }
   },
   "plugins": {
     "updater": {
