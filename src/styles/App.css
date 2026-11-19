@@ -177,3 +177,17 @@ kbd {
   color: var(--text-muted);
   user-select: none;
 }
+
+/* Smooth, overlap-free PDF text selection */
+.react-pdf__Page .textLayer {
+  opacity: 0.22;
+}
+
+.react-pdf__Page .textLayer span::selection {
+  /* Must be an opaque color (no alpha/rgba) so overlapping spans don't stack */
+  background-color: var(--accent-brand); /* or #2563eb if you prefer blue */
+}
+
+.react-pdf__Page .textLayer br::selection {
+  background-color: transparent;
+}

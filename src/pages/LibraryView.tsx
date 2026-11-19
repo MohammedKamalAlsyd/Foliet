@@ -83,11 +83,11 @@ export function LibraryView() {
 
   useEffect(() => {
     return tinykeys(window, {
-      "$mod+k": (e) => {
+      "$mod+f": (e) => {
         e.preventDefault();
         searchRef.current?.focus();
       },
-      "$mod+K": (e) => {
+      "$mod+F": (e) => {
         e.preventDefault();
         searchRef.current?.focus();
       },
@@ -234,7 +234,7 @@ export function LibraryView() {
               className="h-9 pl-9 pr-14"
             />
             <kbd className="pointer-events-none absolute right-3 hidden sm:inline-flex">
-              {shortcutModifier}K
+              {shortcutModifier}+F
             </kbd>
           </div>
 

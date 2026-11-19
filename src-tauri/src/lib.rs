@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use pdf_models::AnnotationDto;
 use tauri::Manager;
 use tauri::http::{Response, StatusCode, header};
+use tauri_plugin_prevent_default::Flags;
 
 enum CachedPdfData {
     File(File),
@@ -310,6 +311,11 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(
+            tauri_plugin_prevent_default::Builder::new()
+                .with_flags(Flags::FIND) // disables Ctrl+F / Cmd+F / F3 / Ctrl+G only
+                .build(),
+        )
         .setup(|app| {
             let app_data_dir = app
                 .path()

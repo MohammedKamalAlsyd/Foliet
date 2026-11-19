@@ -189,7 +189,7 @@ export const PdfPage = memo(function PdfPage({
         cursor: toolCursor,
       }}
       className={cn(
-        "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)] [&_.textLayer_::selection]:!bg-[#2563EB]/30 [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
+        "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)] [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
         activeTool !== "select" &&
           "[&_.textLayer]:!cursor-[inherit] [&_.textLayer_*]:!cursor-[inherit]",
         isNonTextTool &&
