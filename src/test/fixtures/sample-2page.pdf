@@ -1,0 +1,66 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 577 >>
+stream
+BT /F2 16 Tf 1 0 0 1 72 720 Tm (Foliet Research Paper: Neural Retrieval Systems) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 680 Tm (Dense semantic retrieval accelerates scholarly reading workflows) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 662 Tm (by mapping multi-page academic manuscripts into compact vector) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 644 Tm (representations for fast passage lookup.) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 600 Tm (Our transformer architecture introduces cross-document tokeniza-) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 582 Tm (tion and adaptive attention windows for scientific citations.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 1166 >>
+stream
+BT /F2 14 Tf 1 0 0 1 72 720 Tm (Section 2: Experimental Architecture and Results) Tj ET
+q 0.92 0.95 0.99 rg 72 520 204 140 re f 0.15 0.39 0.92 RG 1 w 72 520 204 140 re S Q
+BT /F2 10 Tf 1 0 0 1 96 590 Tm (Encoder -> Vector Index -> Spotlight) Tj ET
+BT /F1 10 Tf 1 0 0 1 72 500 Tm (Figure 1: Neural retrieval pipeline and) Tj ET
+BT /F1 10 Tf 1 0 0 1 72 486 Tm (bounding-box spotlight projection.) Tj ET
+BT /F1 11 Tf 1 0 0 1 72 440 Tm (Left column analysis confirms that) Tj ET
+BT /F1 11 Tf 1 0 0 1 72 424 Tm (normalized coordinates remain invariant) Tj ET
+BT /F1 11 Tf 1 0 0 1 72 408 Tm (across arbitrary viewer zoom scales.) Tj ET
+BT /F1 11 Tf 1 0 0 1 324 640 Tm (Right column benchmark results show) Tj ET
+BT /F1 11 Tf 1 0 0 1 324 624 Tm (sub-millisecond cosine similarity) Tj ET
+BT /F1 11 Tf 1 0 0 1 324 608 Tm (scoring on indexed local documents.) Tj ET
+BT /F1 10 Tf 1 0 0 1 324 500 Tm (Table 2: Unrelated right-column metrics) Tj ET
+BT /F1 10 Tf 1 0 0 1 324 486 Tm (must never merge into left captions.) Tj ET
+BT /F1 11 Tf 1 0 0 1 324 440 Tm (Additional evaluation across Page 2) Tj ET
+BT /F1 11 Tf 1 0 0 1 324 424 Tm (verifies multi-page citation jumping.) Tj ET
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000218 00000 n 
+0000000320 00000 n 
+0000000456 00000 n 
+0000001084 00000 n 
+0000001220 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+2438
+%%EOF
