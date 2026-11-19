@@ -8,6 +8,7 @@
  */
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { useShallow } from "zustand/react/shallow";
 import {
   ArrowUp,
@@ -55,8 +56,20 @@ interface AiChatPanelProps {
   onJumpToPage: (page: number) => void;
 }
 
-const INLINE_TOKEN_REGEX =
-  /(`[^`\n]+`|\*\*[^*\n]+?\*\*|\*[^*\s][^*\n]*?\*|\[(?:[^\]\n]*?,\s*)?Page\s+\d+\]|\(Page\s+\d+\))/gi;
+const CITATION_PREPROCESS_RE =
+  /(```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\n]*\))|(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])(?!\()|(\(Page\s+(\d+)\))/gi;
+
+function preprocessCitations(content: string): string {
+  return content.replace(
+    CITATION_PREPROCESS_RE,
+    (full, skip, bracketCite, bracketPage, parenCite, parenPage) => {
+      if (skip) return full;
+      const page = bracketPage ?? parenPage;
+      const label = bracketCite ?? parenCite;
+      return `[${label}](#foliet-page-${page})`;
+    },
+  );
+}
 
 async function jumpAndSpotlightPage(
   pageNumber: number,
@@ -98,85 +111,47 @@ async function jumpAndSpotlightPage(
   });
 }
 
-function renderInlineMarkdown(
-  text: string,
-  options: {
-    interactiveCitations: boolean;
-    onJumpToPage: (page: number) => void;
-  },
-): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  INLINE_TOKEN_REGEX.lastIndex = 0;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let keyIdx = 0;
+function CodeBlock({ language, code }: { language: string; code: string }) {
+  const [copied, setCopied] = useState(false);
 
-  while ((match = INLINE_TOKEN_REGEX.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
-    }
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
-    const token = match[0];
-    if (token.startsWith("`") && token.endsWith("`")) {
-      nodes.push(
-        <code
-          key={`tok-${keyIdx++}`}
-          className="rounded bg-black/10 dark:bg-white/10 px-1 py-0.5 font-mono text-[11px]"
+  return (
+    <div className="relative my-2 overflow-hidden rounded-lg border border-border bg-zinc-950 text-zinc-100 dark:bg-zinc-900">
+      <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/60 px-3 py-1 font-mono text-[11px] text-zinc-400 select-none">
+        <span>{language}</span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="flex items-center gap-1 hover:text-zinc-200"
         >
-          {token.slice(1, -1)}
-        </code>,
-      );
-    } else if (token.startsWith("**") && token.endsWith("**")) {
-      nodes.push(
-        <strong key={`tok-${keyIdx++}`} className="font-semibold">
-          {token.slice(2, -2)}
-        </strong>,
-      );
-    } else if (token.startsWith("*") && token.endsWith("*")) {
-      nodes.push(
-        <em key={`tok-${keyIdx++}`} className="italic">
-          {token.slice(1, -1)}
-        </em>,
-      );
-    } else {
-      const pageMatch = /Page\s+(\d+)/i.exec(token);
-      const pageNum = pageMatch ? Number(pageMatch[1]) : NaN;
-      if (
-        options.interactiveCitations &&
-        Number.isFinite(pageNum) &&
-        pageNum >= 1
-      ) {
-        nodes.push(
-          <button
-            key={`tok-${keyIdx++}`}
-            type="button"
-            onClick={() =>
-              void jumpAndSpotlightPage(pageNum, options.onJumpToPage)
-            }
-            title={`Jump to Page ${pageNum}`}
-            className="mx-0.5 inline-flex items-center rounded border border-[var(--accent-brand,#2563EB)]/30 bg-[var(--accent-brand,#2563EB)]/10 px-1 py-0 font-mono text-[10.5px] font-medium text-[var(--accent-brand,#2563EB)] transition-colors hover:bg-[var(--accent-brand,#2563EB)]/20 cursor-pointer align-baseline"
-          >
-            {token}
-          </button>,
-        );
-      } else {
-        nodes.push(token);
-      }
-    }
-
-    lastIndex = INLINE_TOKEN_REGEX.lastIndex;
-  }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-
-  return nodes;
+          {copied ? (
+            <>
+              <Check size={12} className="text-emerald-400" />
+              <span className="text-emerald-400">Copied</span>
+            </>
+          ) : (
+            <>
+              <Copy size={12} />
+              <span>Copy</span>
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-normal select-text">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
 }
 
 /**
- * Renders message content with support for code blocks, headings, lists,
- * inline formatting, executed tool badges, and clickable citations.
+ * Renders message content via react-markdown with custom code blocks,
+ * executed tool badges, and clickable `[Page X]` / `(Page X)` citations.
  */
 function FormattedMessageContent({
   content,
@@ -193,54 +168,111 @@ function FormattedMessageContent({
   citations?: CitationReference[];
   toolCalls?: ExecutedToolCall[];
 }) {
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+  const markdownSource = useMemo(
+    () => (isUser ? content : preprocessCitations(content)),
+    [content, isUser],
+  );
 
-  const handleCopyCode = (code: string, index: number) => {
-    navigator.clipboard.writeText(code);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
-  };
-
-  // Split text by markdown code blocks: ```lang ... ```
-  const segments = useMemo(() => {
-    const parts: Array<{
-      type: "text" | "code";
-      content: string;
-      language?: string;
-    }> = [];
-    const regex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
-    let lastIndex = 0;
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(content)) !== null) {
-      if (match.index > lastIndex) {
-        parts.push({
-          type: "text",
-          content: content.slice(lastIndex, match.index),
-        });
-      }
-      parts.push({
-        type: "code",
-        language: match[1] || "code",
-        content: match[2],
-      });
-      lastIndex = regex.lastIndex;
-    }
-
-    if (lastIndex < content.length) {
-      parts.push({ type: "text", content: content.slice(lastIndex) });
-    }
-
-    return parts;
-  }, [content]);
-
-  const inlineOpts = {
-    interactiveCitations: !isUser,
-    onJumpToPage,
-  };
+  const markdownComponents = useMemo<Components>(
+    () => ({
+      h1: ({ children }) => (
+        <h1 className="pt-2 text-[14px] font-semibold text-inherit">
+          {children}
+        </h1>
+      ),
+      h2: ({ children }) => (
+        <h2 className="pt-2 text-[13px] font-semibold text-inherit">
+          {children}
+        </h2>
+      ),
+      h3: ({ children }) => (
+        <h3 className="pt-1.5 text-xs font-semibold text-inherit">
+          {children}
+        </h3>
+      ),
+      h4: ({ children }) => (
+        <h4 className="pt-1.5 text-xs font-semibold text-inherit">
+          {children}
+        </h4>
+      ),
+      p: ({ children }) => <p className="leading-relaxed">{children}</p>,
+      ul: ({ children }) => (
+        <ul className="list-disc space-y-1 pl-4 marker:text-[var(--accent-brand,#2563EB)]">
+          {children}
+        </ul>
+      ),
+      ol: ({ children }) => (
+        <ol className="list-decimal space-y-1 pl-4 marker:font-mono marker:text-[11px] marker:font-semibold">
+          {children}
+        </ol>
+      ),
+      li: ({ children }) => <li className="pl-0.5">{children}</li>,
+      blockquote: ({ children }) => (
+        <blockquote className="border-l-2 border-[var(--accent-brand,#2563EB)]/40 pl-2.5 italic opacity-90">
+          {children}
+        </blockquote>
+      ),
+      hr: () => <hr className="my-2 border-border/60" />,
+      strong: ({ children }) => (
+        <strong className="font-semibold">{children}</strong>
+      ),
+      em: ({ children }) => <em className="italic">{children}</em>,
+      code: ({ children }) => (
+        <code className="rounded bg-black/10 px-1 py-0.5 font-mono text-[11px] dark:bg-white/10">
+          {children}
+        </code>
+      ),
+      pre: ({ children }) => {
+        const codeEl = React.isValidElement<{
+          className?: string;
+          children?: React.ReactNode;
+        }>(children)
+          ? children
+          : null;
+        const lang =
+          /language-([^\s]+)/.exec(codeEl?.props?.className ?? "")?.[1] ||
+          "text";
+        const raw = String(codeEl?.props?.children ?? children ?? "").replace(
+          /\n$/,
+          "",
+        );
+        return <CodeBlock language={lang} code={raw} />;
+      },
+      a: ({ href, children }) => {
+        const pageMatch = /^#foliet-page-(\d+)$/.exec(href ?? "");
+        if (pageMatch) {
+          const pageNum = Number(pageMatch[1]);
+          return (
+            <button
+              type="button"
+              onClick={() => void jumpAndSpotlightPage(pageNum, onJumpToPage)}
+              title={`Jump to Page ${pageNum}`}
+              className="mx-0.5 inline-flex cursor-pointer items-center rounded border border-[var(--accent-brand,#2563EB)]/30 bg-[var(--accent-brand,#2563EB)]/10 px-1 py-0 align-baseline font-mono text-[10.5px] font-medium text-[var(--accent-brand,#2563EB)] transition-colors hover:bg-[var(--accent-brand,#2563EB)]/20"
+            >
+              {children}
+            </button>
+          );
+        }
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className={cn(
+              "underline underline-offset-2 hover:opacity-80",
+              isUser ? "text-inherit" : "text-[var(--accent-brand,#2563EB)]",
+            )}
+          >
+            {children}
+          </a>
+        );
+      },
+    }),
+    [isUser, onJumpToPage],
+  );
 
   return (
-    <div className="space-y-2 text-xs leading-relaxed text-inherit select-text">
+    <div className="space-y-1.5 text-xs leading-relaxed text-inherit select-text">
       {/* Executed Tool Badges */}
       {toolCalls && toolCalls.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 pb-0.5 select-none">
@@ -269,128 +301,18 @@ function FormattedMessageContent({
         </div>
       )}
 
-      {segments.map((seg, idx) => {
-        if (seg.type === "code") {
-          return (
-            <div
-              key={idx}
-              className="relative my-2 overflow-hidden rounded-lg border border-border bg-zinc-950 text-zinc-100 dark:bg-zinc-900"
-            >
-              <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/60 px-3 py-1 text-[11px] font-mono text-zinc-400 select-none">
-                <span>{seg.language || "text"}</span>
-                <button
-                  type="button"
-                  onClick={() => handleCopyCode(seg.content, idx)}
-                  className="flex items-center gap-1 hover:text-zinc-200"
-                >
-                  {copiedIndex === idx ? (
-                    <>
-                      <Check size={12} className="text-emerald-400" />
-                      <span className="text-emerald-400">Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy size={12} />
-                      <span>Copy</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <pre className="overflow-x-auto p-3 font-mono text-[11.5px] leading-normal select-text">
-                <code>{seg.content}</code>
-              </pre>
-            </div>
-          );
-        }
-
-        // Split plain text into lines/paragraphs
-        const lines = seg.content.split("\n");
-        return (
-          <div key={idx} className="space-y-1.5">
-            {lines.map((line, lineIdx) => {
-              const trimmed = line.trim();
-              if (!trimmed) return <div key={lineIdx} className="h-0.5" />;
-
-              // Horizontal rule
-              if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
-                return <hr key={lineIdx} className="my-2 border-border/60" />;
-              }
-
-              // Headings (# to ####)
-              const headingMatch = /^(#{1,4})\s+(.+)$/.exec(trimmed);
-              if (headingMatch) {
-                const level = headingMatch[1].length;
-                const headingText = headingMatch[2];
-                return (
-                  <div
-                    key={lineIdx}
-                    className={cn(
-                      "font-semibold text-inherit",
-                      level === 1 && "pt-2 text-[14px]",
-                      level === 2 && "pt-2 text-[13px]",
-                      level >= 3 && "pt-1.5 text-xs",
-                    )}
-                  >
-                    {renderInlineMarkdown(headingText, inlineOpts)}
-                  </div>
-                );
-              }
-
-              // Blockquote
-              if (trimmed.startsWith("> ")) {
-                return (
-                  <blockquote
-                    key={lineIdx}
-                    className="border-l-2 border-[var(--accent-brand,#2563EB)]/40 pl-2.5 italic opacity-90"
-                  >
-                    {renderInlineMarkdown(trimmed.slice(2), inlineOpts)}
-                  </blockquote>
-                );
-              }
-
-              // Unordered bullet point (- or *)
-              if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
-                return (
-                  <div key={lineIdx} className="flex items-start gap-2 pl-1">
-                    <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent-brand,#2563EB)]" />
-                    <span className="min-w-0 flex-1">
-                      {renderInlineMarkdown(trimmed.slice(2), inlineOpts)}
-                    </span>
-                  </div>
-                );
-              }
-
-              // Ordered list item (1. , 2. , etc.)
-              const orderedMatch = /^(\d+\.)\s+(.+)$/.exec(trimmed);
-              if (orderedMatch) {
-                return (
-                  <div key={lineIdx} className="flex items-start gap-1.5 pl-1">
-                    <span className="shrink-0 font-mono text-[11px] font-semibold opacity-80">
-                      {orderedMatch[1]}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      {renderInlineMarkdown(orderedMatch[2], inlineOpts)}
-                    </span>
-                  </div>
-                );
-              }
-
-              return (
-                <p key={lineIdx}>{renderInlineMarkdown(line, inlineOpts)}</p>
-              );
-            })}
-          </div>
-        );
-      })}
+      <ReactMarkdown components={markdownComponents}>
+        {markdownSource}
+      </ReactMarkdown>
 
       {/* Streaming typing cursor indicator */}
       {isStreaming && (
-        <span className="inline-block h-3.5 w-1.5 animate-pulse bg-[var(--accent-brand,#2563EB)] align-middle ml-0.5" />
+        <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-[var(--accent-brand,#2563EB)] align-middle" />
       )}
 
       {/* Clickable Citations */}
       {citations && citations.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 pt-1 border-t border-border/40 select-none">
+        <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border/40 pt-1 select-none">
           <span className="text-[11px] font-medium text-muted-foreground">
             Sources:
           </span>
