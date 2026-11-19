@@ -45,11 +45,13 @@ import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { LLM_PRESETS } from "@/constants/models";
 import type {
+  ChatMessage,
   CitationReference,
   ExecutedToolCall,
   LlmProvider,
 } from "@/types/chat";
 import {
+  PAGE_CITATION_REGEX,
   extractSentenceAroundOffset,
   jumpAndSpotlightCitation,
 } from "@/utils/citationSpotlight";
@@ -59,8 +61,11 @@ interface AiChatPanelProps {
   onJumpToPage: (page: number) => void;
 }
 
-const CITATION_PREPROCESS_RE =
-  /(```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\n]*\))|(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])(?!\()|(\(Page\s+(\d+)\))/gi;
+const CITATION_PREPROCESS_RE = new RegExp(
+  "(```[\\s\\S]*?```|`[^`\\n]+`|\\[[^\\]\\n]*\\]\\([^)\\n]*\\))|" +
+    PAGE_CITATION_REGEX.source,
+  "gi",
+);
 
 function preprocessCitations(content: string): {
   markdown: string;
@@ -339,13 +344,59 @@ function FormattedMessageContent({
   );
 }
 
+const ChatMessageBubble = React.memo(function ChatMessageBubble({
+  message,
+  onJumpToPage,
+}: {
+  message: ChatMessage;
+  onJumpToPage: (page: number) => void;
+}) {
+  const isUser = message.role === "user";
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-1 max-w-[92%]",
+        isUser ? "ml-auto items-end" : "mr-auto items-start",
+      )}
+    >
+      {/* Role / Avatar Indicator */}
+      {!isUser && (
+        <div className="flex items-center gap-1.5 px-0.5 text-[11px] font-medium text-muted-foreground select-none">
+          <AiMascot size={14} state="idle" interactive={false} />
+          <span>Lio</span>
+        </div>
+      )}
+
+      <div
+        className={cn(
+          "rounded-2xl px-3.5 py-2.5 text-xs shadow-sm select-text",
+          isUser
+            ? "bg-[var(--accent-brand,#2563EB)] text-[var(--accent-brand-fg)] rounded-tr-sm [&::selection]:bg-white/35 [&_*::selection]:bg-white/35 [&_*::selection]:text-[var(--accent-brand-fg)]"
+            : "border border-border/80 bg-card text-foreground rounded-tl-sm",
+        )}
+      >
+        <FormattedMessageContent
+          content={message.content}
+          isUser={isUser}
+          isStreaming={message.isStreaming}
+          onJumpToPage={onJumpToPage}
+          citations={message.citations}
+          toolCalls={message.toolCalls}
+        />
+      </div>
+    </div>
+  );
+});
+
 export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
   const [inputText, setInputText] = useState("");
   const [useRagContext, setUseRagContext] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const isNearBottomRef = useRef(true);
 
   const activeDoc = useDocumentStore((s) => s.activeDoc);
 
@@ -418,10 +469,36 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
     loadConversations(activeDoc?.id);
   }, [activeDoc?.id, loadConversations]);
 
-  // Auto-scroll messages to bottom
+  const activeConv = useMemo(
+    () =>
+      conversations.find((c) => c.id === activeConversationId) ??
+      conversations[0],
+    [conversations, activeConversationId],
+  );
+
+  const activeConvId = activeConv?.id ?? null;
+  const messageCount = activeConv?.messages.length ?? 0;
+  const lastMessage =
+    messageCount > 0 ? activeConv?.messages[messageCount - 1] : undefined;
+  const lastMessageContentLen = lastMessage?.content.length ?? 0;
+  const lastMessageToolCount = lastMessage?.toolCalls?.length ?? 0;
+
+  // Reset stick-to-bottom when switching conversations
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [conversations, isStreaming]);
+    isNearBottomRef.current = true;
+  }, [activeConvId]);
+
+  // Auto-scroll messages to bottom only when already near bottom
+  useEffect(() => {
+    if (!isNearBottomRef.current) return;
+    messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+  }, [
+    activeConvId,
+    messageCount,
+    lastMessageContentLen,
+    lastMessageToolCount,
+    isStreaming,
+  ]);
 
   // Auto-focus input when a selection snippet arrives from "Ask Lio"
   useEffect(() => {
@@ -429,13 +506,6 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
       inputRef.current?.focus();
     }
   }, [pendingContextSnippet]);
-
-  const activeConv = useMemo(
-    () =>
-      conversations.find((c) => c.id === activeConversationId) ??
-      conversations[0],
-    [conversations, activeConversationId],
-  );
 
   // Calculate dynamic mascot mood
   const mascotState: MascotState = useMemo(() => {
@@ -447,10 +517,18 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
     return "idle";
   }, [isStreaming, activeConv, pendingContextSnippet]);
 
+  const handleMessagesScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    isNearBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+  };
+
   const handleSendMessage = async () => {
     const text = inputText.trim();
     if (!text && !pendingContextSnippet) return;
 
+    isNearBottomRef.current = true;
     setInputText("");
     const promptText = text || "Can you explain this excerpt in context?";
     await sendMessage(promptText, {
@@ -469,6 +547,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
   };
 
   const handlePromptSuggestion = (prompt: string) => {
+    isNearBottomRef.current = true;
     sendMessage(prompt, {
       docId: activeDoc?.id,
       docTitle: activeDoc?.title,
@@ -646,7 +725,11 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
       </div>
 
       {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 select-text">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleMessagesScroll}
+        className="flex-1 overflow-y-auto px-4 py-4 space-y-4 select-text"
+      >
         {!activeConv?.messages || activeConv.messages.length === 0 ? (
           /* Scholarly Empty State */
           <div className="flex h-full flex-col items-center justify-center gap-3 text-center px-4 py-8 select-none">
@@ -701,44 +784,13 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
           </div>
         ) : (
           /* Messages List */
-          activeConv.messages.map((msg) => {
-            const isUser = msg.role === "user";
-            return (
-              <div
-                key={msg.id}
-                className={cn(
-                  "flex flex-col gap-1 max-w-[92%]",
-                  isUser ? "ml-auto items-end" : "mr-auto items-start",
-                )}
-              >
-                {/* Role / Avatar Indicator */}
-                {!isUser && (
-                  <div className="flex items-center gap-1.5 px-0.5 text-[11px] font-medium text-muted-foreground select-none">
-                    <AiMascot size={14} state="idle" interactive={false} />
-                    <span>Lio</span>
-                  </div>
-                )}
-
-                <div
-                  className={cn(
-                    "rounded-2xl px-3.5 py-2.5 text-xs shadow-sm select-text",
-                    isUser
-                      ? "bg-[var(--accent-brand,#2563EB)] text-[var(--accent-brand-fg,#ffffff)] rounded-tr-sm [&::selection]:bg-white/35 [&_*::selection]:bg-white/35 [&_*::selection]:text-white"
-                      : "border border-border/80 bg-card text-foreground rounded-tl-sm",
-                  )}
-                >
-                  <FormattedMessageContent
-                    content={msg.content}
-                    isUser={isUser}
-                    isStreaming={msg.isStreaming}
-                    onJumpToPage={onJumpToPage}
-                    citations={msg.citations}
-                    toolCalls={msg.toolCalls}
-                  />
-                </div>
-              </div>
-            );
-          })
+          activeConv.messages.map((msg) => (
+            <ChatMessageBubble
+              key={msg.id}
+              message={msg}
+              onJumpToPage={onJumpToPage}
+            />
+          ))
         )}
         <div ref={messagesEndRef} />
       </div>
@@ -847,7 +899,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
                 size="sm"
                 onClick={handleSendMessage}
                 disabled={!inputText.trim() && !pendingContextSnippet}
-                className="h-7 gap-1 rounded-lg px-2.5 text-xs bg-[var(--accent-brand,#2563EB)] hover:bg-[var(--accent-brand,#2563EB)]/90 text-white"
+                className="h-7 gap-1 rounded-lg px-2.5 text-xs bg-[var(--accent-brand,#2563EB)] hover:bg-[var(--accent-brand,#2563EB)]/90 text-[var(--accent-brand-fg)]"
               >
                 <span>Send</span>
                 <ArrowUp size={12} strokeWidth={2} />

@@ -1,3 +1,4 @@
+import { resolveCropImageSrc } from "@/services/cropResolver";
 import {
     captureFigureCropFromPage,
     insertFigureIntoSummary,
@@ -223,7 +224,7 @@ async function resolveCropForFigureExplanation(params: {
         dataUrl = selectedCrop.imageUrl;
     } else {
         const uri = resolveCropUri(selectedCrop.id, selectedCrop.imageUrl);
-        dataUrl = await DocumentDatabase.getFigureCrop(uri).catch(() => null);
+        dataUrl = await resolveCropImageSrc(uri).catch(() => null);
     }
 
     if (!dataUrl || !dataUrl.startsWith("data:")) return null;
@@ -325,6 +326,7 @@ export async function executeCopilotToolCall(
             text: passageText,
             similarityScore: 1.0,
             rectSegments,
+            highlightKind: "tool",
         });
 
         return {
@@ -354,6 +356,7 @@ export async function executeCopilotToolCall(
                 text: matchedChunk.text,
                 similarityScore: 1.0,
                 rectSegments: matchedChunk.rectSegments,
+                highlightKind: "tool",
             });
             const adjacentChunks = pageChunks
                 .filter((c) => c.chunkId !== matchedChunk.chunkId)

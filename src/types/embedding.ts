@@ -28,10 +28,13 @@ export interface DocumentChunk extends ChunkBase {
     embedding?: number[];
 }
 
+export type HighlightKind = "rag" | "citation" | "tool";
+
 export interface RagSearchResult extends ChunkBase {
     docId: string;
     docTitle: string;
     similarityScore: number;
+    highlightKind?: HighlightKind;
 }
 
 export interface CatalogEntry extends DocRef {

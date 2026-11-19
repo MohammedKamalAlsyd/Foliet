@@ -51,55 +51,18 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { DocumentDatabase } from "@/services/storage/database";
+import { getCachedCrop, resolveCropImageSrc } from "@/services/cropResolver";
 import {
+  PAGE_CITATION_REGEX,
   extractSentenceAroundOffset,
   jumpAndSpotlightCitation,
 } from "@/utils/citationSpotlight";
 import { cn } from "@/lib/utils";
 
 const lowlight = createLowlight(common);
-const MAX_CROP_CACHE_ENTRIES = 30;
 const MAX_DROPPED_IMAGE_BYTES = 5 * 1024 * 1024;
-const resolvedCropCache = new Map<string, string>();
+const STREAM_SYNC_INTERVAL_MS = 250;
 const pageCitationPluginKey = new PluginKey("folietPageCitations");
-const PAGE_CITATION_REGEX =
-  /(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])|(\(Page\s+(\d+)\))/gi;
-const MARKDOWN_CROP_IMAGE_RE =
-  /(!\[[^\]]*\]\()((?:idb|db):\/\/[^)\s]+)((?:\s+[^)]*)?\))/g;
-
-function getCachedCrop(key: string): string | null {
-  const cached = resolvedCropCache.get(key);
-  if (cached === undefined) return null;
-  resolvedCropCache.delete(key);
-  resolvedCropCache.set(key, cached);
-  return cached;
-}
-
-function setCachedCrop(key: string, value: string): void {
-  if (resolvedCropCache.has(key)) {
-    resolvedCropCache.delete(key);
-  }
-  resolvedCropCache.set(key, value);
-  while (resolvedCropCache.size > MAX_CROP_CACHE_ENTRIES) {
-    const oldestKey = resolvedCropCache.keys().next().value;
-    if (oldestKey === undefined) break;
-    resolvedCropCache.delete(oldestKey);
-  }
-}
-
-export function clearResolvedCropCache(uriOrId?: string): void {
-  if (!uriOrId) {
-    resolvedCropCache.clear();
-    return;
-  }
-  const bare = uriOrId.replace(/^(?:idb|db):\/\//, "");
-  for (const key of Array.from(resolvedCropCache.keys())) {
-    if (key === uriOrId || key.replace(/^(?:idb|db):\/\//, "") === bare) {
-      resolvedCropCache.delete(key);
-    }
-  }
-}
 
 function normalizeHeadingBasic(text: string): string {
   return text
@@ -231,71 +194,6 @@ function createPageCitationExtension(
       ];
     },
   });
-}
-
-/**
- * Resolves an `idb://...` or `db://...` crop URI from SQLite (cached in LRU memory),
- * or returns standard `data:` / `http(s):` URLs unchanged.
- */
-export async function resolveCropImageSrc(src: string): Promise<string | null> {
-  if (!src) return null;
-  if (
-    src.startsWith("data:") ||
-    src.startsWith("http://") ||
-    src.startsWith("https://")
-  ) {
-    return src;
-  }
-
-  const cached = getCachedCrop(src);
-  if (cached) return cached;
-
-  if (
-    src.startsWith("idb://") ||
-    src.startsWith("db://") ||
-    src.startsWith("crop-")
-  ) {
-    const dataUrl = await DocumentDatabase.getFigureCrop(src);
-    if (dataUrl) {
-      setCachedCrop(src, dataUrl);
-      return dataUrl;
-    }
-  }
-
-  return null;
-}
-
-/**
- * Expands `idb://...` image links in exported Markdown to standalone data URIs
- * so exported `.md` files render figures in external Markdown viewers.
- */
-export async function resolveMarkdownCropImages(
-  markdown: string,
-): Promise<string> {
-  const uris = new Set<string>();
-  for (const match of markdown.matchAll(MARKDOWN_CROP_IMAGE_RE)) {
-    uris.add(match[2]);
-  }
-  if (uris.size === 0) return markdown;
-
-  const resolvedMap = new Map<string, string>();
-  await Promise.all(
-    Array.from(uris).map(async (uri) => {
-      const resolved = await resolveCropImageSrc(uri);
-      if (resolved) {
-        resolvedMap.set(uri, resolved);
-      }
-    }),
-  );
-  if (resolvedMap.size === 0) return markdown;
-
-  return markdown.replace(
-    MARKDOWN_CROP_IMAGE_RE,
-    (full, prefix: string, uri: string, suffix: string) => {
-      const resolved = resolvedMap.get(uri);
-      return resolved ? `${prefix}${resolved}${suffix}` : full;
-    },
-  );
 }
 
 const CropImageNodeView: React.FC<NodeViewProps> = ({
@@ -462,12 +360,14 @@ export const SummaryDocsEditor = forwardRef<
   ref,
 ) {
   const lastSyncedMarkdownRef = useRef<string>(markdown);
+  const latestMarkdownRef = useRef<string>(markdown);
   const streamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStreamingRef = useRef<boolean>(isStreaming);
   const isApplyingExternalRef = useRef<boolean>(false);
   const onJumpToPageRef = useRef(onJumpToPage);
   const [isDragOver, setIsDragOver] = useState(false);
 
+  latestMarkdownRef.current = markdown;
   isStreamingRef.current = isStreaming;
   onJumpToPageRef.current = onJumpToPage;
 
@@ -611,7 +511,10 @@ export const SummaryDocsEditor = forwardRef<
           .setImage({ src, alt: alt || "Captured PDF figure" })
           .run();
       },
-      getMarkdown: () => editor?.getMarkdown() ?? lastSyncedMarkdownRef.current,
+      getMarkdown: () =>
+        isStreamingRef.current
+          ? latestMarkdownRef.current
+          : (editor?.getMarkdown() ?? lastSyncedMarkdownRef.current),
       scrollToHeading: (title: string) => {
         if (!editor) return;
         const targetExact = title.toLowerCase().trim();
@@ -701,17 +604,18 @@ export const SummaryDocsEditor = forwardRef<
     }
   }, [editor, isStreaming]);
 
-  // Sync external Markdown updates (initial load, regeneration, or streaming chunks)
+  // Sync external Markdown updates (initial load, regeneration, or throttled streaming chunks)
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    if (markdown === lastSyncedMarkdownRef.current) return;
 
-    const applyContent = () => {
+    const applyLatestContent = () => {
       if (editor.isDestroyed) return;
-      lastSyncedMarkdownRef.current = markdown;
+      const nextContent = latestMarkdownRef.current;
+      if (nextContent === lastSyncedMarkdownRef.current) return;
+      lastSyncedMarkdownRef.current = nextContent;
       isApplyingExternalRef.current = true;
       try {
-        editor.commands.setContent(markdown || "", {
+        editor.commands.setContent(nextContent || "", {
           emitUpdate: false,
           contentType: "markdown",
         });
@@ -723,11 +627,12 @@ export const SummaryDocsEditor = forwardRef<
     };
 
     if (isStreaming) {
+      if (markdown === lastSyncedMarkdownRef.current) return;
       if (streamTimerRef.current) return;
       streamTimerRef.current = setTimeout(() => {
         streamTimerRef.current = null;
-        applyContent();
-      }, 64);
+        applyLatestContent();
+      }, STREAM_SYNC_INTERVAL_MS);
       return;
     }
 
@@ -735,7 +640,7 @@ export const SummaryDocsEditor = forwardRef<
       clearTimeout(streamTimerRef.current);
       streamTimerRef.current = null;
     }
-    applyContent();
+    applyLatestContent();
   }, [editor, markdown, isStreaming]);
 
   useEffect(() => {

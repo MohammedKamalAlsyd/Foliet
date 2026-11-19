@@ -83,6 +83,7 @@ export const PdfPage = memo(function PdfPage({
     (s) => s.isSummaryWorkspaceOpen,
   );
   const isRagHighlighted = Boolean(activeRagHighlight);
+  const showRagMatchBanner = activeRagHighlight?.highlightKind === "rag";
 
   const setRefs = useCallback(
     (el: HTMLDivElement | null) => {
@@ -272,8 +273,8 @@ export const PdfPage = memo(function PdfPage({
         onDismissQuickInsert={dismissQuickInsert}
       />
 
-      {/* Visual RAG Highlight Match Banner */}
-      {isRagHighlighted && activeRagHighlight && (
+      {/* Visual RAG Highlight Match Banner (only for genuine RAG search results) */}
+      {showRagMatchBanner && activeRagHighlight && (
         <div
           role="status"
           aria-label="RAG search highlight"

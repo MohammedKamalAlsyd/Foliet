@@ -118,7 +118,7 @@ let latestLoadToken = 0;
 export const useSummaryStore = create<SummaryStore>((set, get) => {
     const captureBackup = async (docId: string, override?: AiSummaryState | null) => {
         if (override?.content?.trim()) {
-            writePreviousSummaryBackup(docId, override);
+            await writePreviousSummaryBackup(docId, override);
             set({ previousSummary: override });
             return;
         }
@@ -255,25 +255,29 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
             const token = ++latestLoadToken;
             set({
                 isLoadingSummary: true,
-                previousSummary: readPreviousSummaryBackup(docId),
+                previousSummary: null,
             });
             try {
-                const summary = await DocumentDatabase.getSummary(docId);
+                const [summary, backup] = await Promise.all([
+                    DocumentDatabase.getSummary(docId),
+                    readPreviousSummaryBackup(docId),
+                ]);
                 if (token !== latestLoadToken) return;
                 set({
                     activeSummary: summary,
-                    previousSummary: readPreviousSummaryBackup(docId),
+                    previousSummary: backup,
                     isLoadingSummary: false,
                 });
             } catch (err) {
                 if (token !== latestLoadToken) return;
                 console.warn("SummaryStore: Failed to load summary:", err);
-                set({ activeSummary: null, isLoadingSummary: false });
+                set({ activeSummary: null, previousSummary: null, isLoadingSummary: false });
             }
         },
 
         restorePreviousSummary: async (docId) => {
-            const backup = get().previousSummary ?? readPreviousSummaryBackup(docId);
+            const backup =
+                get().previousSummary ?? (await readPreviousSummaryBackup(docId));
             if (!backup?.content?.trim()) return;
 
             const current = get().activeSummary;
@@ -290,7 +294,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 }
                 : null;
 
-            writePreviousSummaryBackup(docId, nextBackup);
+            await writePreviousSummaryBackup(docId, nextBackup);
             set({
                 activeSummary: { ...backup, updatedAt: Date.now() },
                 previousSummary: nextBackup,

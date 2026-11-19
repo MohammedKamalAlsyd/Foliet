@@ -293,6 +293,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
         let accumulatedText = "";
         const allExecutedTools: ExecutedToolCall[] = [];
+        let flushFrameId: number | null = null;
+        let flushTimeoutId: ReturnType<typeof setTimeout> | null = null;
+        let hasPendingTextFlush = false;
+        let lastFlushTs = 0;
+        const STREAM_BATCH_MS = 50;
 
         const patchAssistant = (patch: Partial<ChatMessage>, isFinal = false) => {
             set((s) =>
@@ -308,7 +313,54 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             );
         };
 
+        const cancelPendingFlush = () => {
+            if (flushFrameId !== null && typeof cancelAnimationFrame === "function") {
+                cancelAnimationFrame(flushFrameId);
+                flushFrameId = null;
+            }
+            if (flushTimeoutId !== null) {
+                clearTimeout(flushTimeoutId);
+                flushTimeoutId = null;
+            }
+            hasPendingTextFlush = false;
+        };
+
+        const flushAccumulatedText = () => {
+            flushFrameId = null;
+            flushTimeoutId = null;
+            if (!hasPendingTextFlush) return;
+            hasPendingTextFlush = false;
+            lastFlushTs = Date.now();
+            patchAssistant({ content: accumulatedText });
+        };
+
+        const scheduleTextFlush = () => {
+            hasPendingTextFlush = true;
+            if (flushFrameId !== null || flushTimeoutId !== null) return;
+
+            const elapsed = Date.now() - lastFlushTs;
+            const remaining = Math.max(0, STREAM_BATCH_MS - elapsed);
+
+            const scheduleFrame = () => {
+                if (typeof requestAnimationFrame === "function") {
+                    flushFrameId = requestAnimationFrame(flushAccumulatedText);
+                } else {
+                    flushAccumulatedText();
+                }
+            };
+
+            if (remaining === 0) {
+                scheduleFrame();
+            } else {
+                flushTimeoutId = setTimeout(() => {
+                    flushTimeoutId = null;
+                    scheduleFrame();
+                }, remaining);
+            }
+        };
+
         const finalizeMessage = async (finalContent: string) => {
+            cancelPendingFlush();
             patchAssistant(
                 {
                     isStreaming: false,
@@ -351,14 +403,23 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     },
                     (executed) => {
                         allExecutedTools.push(executed);
-                        patchAssistant({ toolCalls: [...allExecutedTools] });
+                        if (hasPendingTextFlush) {
+                            cancelPendingFlush();
+                            lastFlushTs = Date.now();
+                            patchAssistant({
+                                content: accumulatedText,
+                                toolCalls: [...allExecutedTools],
+                            });
+                        } else {
+                            patchAssistant({ toolCalls: [...allExecutedTools] });
+                        }
                     },
                 ),
                 maxSteps: 3,
                 signal: abortController.signal,
                 onChunk: (chunk) => {
                     accumulatedText += chunk;
-                    patchAssistant({ content: accumulatedText });
+                    scheduleTextFlush();
                 },
             });
 
@@ -368,6 +429,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                 formatStreamErrorOutput(accumulatedText, err, abortController.signal),
             );
         } finally {
+            cancelPendingFlush();
             if (activeAbortController === abortController) {
                 activeAbortController = null;
             }

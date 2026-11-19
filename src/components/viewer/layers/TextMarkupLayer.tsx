@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
+import { getEraserPointerHandlers } from "@/components/viewer/layers/eraserHandlers";
 import { cn } from "@/lib/utils";
 import type { TextMarkupAnnotation } from "@/types/annotations";
 import type { RagSearchResult } from "@/types/embedding";
@@ -11,7 +12,7 @@ interface TextMarkupLayerProps {
   onDeleteAnnotation: (id: string) => void;
 }
 
-export function TextMarkupLayer({
+export const TextMarkupLayer = memo(function TextMarkupLayer({
   textMarkups,
   ragHighlight,
   isDimensionsSettled,
@@ -90,88 +91,79 @@ export function TextMarkupLayer({
         />
       ))}
 
-      {textMarkups.map((annot) => (
-        <div
-          key={annot.id}
-          className={cn(
-            "pointer-events-none absolute inset-0",
-            annot.toolType === "highlight" && "opacity-40 mix-blend-multiply",
-          )}
-        >
-          {annot.rectSegments.map((seg, idx) => (
-            <div
-              key={`${annot.id}-${idx}`}
-              onPointerDown={
-                isEraser
-                  ? (e) => {
-                      if (e.button === 0) {
-                        e.stopPropagation();
-                        onDeleteAnnotation(annot.id);
-                      }
-                    }
-                  : undefined
-              }
-              onPointerEnter={
-                isEraser
-                  ? (e) => {
-                      if (e.buttons === 1) {
-                        onDeleteAnnotation(annot.id);
-                      }
-                    }
-                  : undefined
-              }
-              style={{
-                left: `${seg.x * 100}%`,
-                top: `${seg.y * 100}%`,
-                width: `${seg.width * 100}%`,
-                height: `${seg.height * 100}%`,
-              }}
-              className={cn(
-                "absolute",
-                isEraser &&
-                  "pointer-events-auto cursor-[inherit] hover:opacity-60",
-              )}
-            >
-              {annot.toolType === "highlight" && (
-                <div
-                  className="h-full w-full rounded-[2px]"
-                  style={{ backgroundColor: annot.color }}
-                />
-              )}
-              {annot.toolType === "strikethrough" && (
-                <div
-                  className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
-                  style={{ backgroundColor: annot.color }}
-                />
-              )}
-              {annot.toolType === "underline" &&
-                (annot.underlineStyle === "squiggle" ? (
-                  <svg
-                    viewBox="0 0 100 8"
-                    preserveAspectRatio="none"
-                    className="absolute inset-x-0 bottom-0 h-[4px] w-full"
-                  >
-                    <path
-                      d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
-                      fill="none"
-                      stroke={annot.color}
-                      strokeWidth="2"
-                    />
-                  </svg>
-                ) : (
+      {textMarkups.map((annot) => {
+        const eraserHandlers = getEraserPointerHandlers(
+          isEraser,
+          annot.id,
+          onDeleteAnnotation,
+        );
+        return (
+          <div
+            key={annot.id}
+            className={cn(
+              "pointer-events-none absolute inset-0",
+              annot.toolType === "highlight" && "opacity-40 mix-blend-multiply",
+            )}
+          >
+            {annot.rectSegments.map((seg, idx) => (
+              <div
+                key={`${annot.id}-${idx}`}
+                {...eraserHandlers}
+                style={{
+                  left: `${seg.x * 100}%`,
+                  top: `${seg.y * 100}%`,
+                  width: `${seg.width * 100}%`,
+                  height: `${seg.height * 100}%`,
+                }}
+                className={cn(
+                  "absolute",
+                  isEraser &&
+                    "pointer-events-auto cursor-[inherit] hover:opacity-60",
+                )}
+              >
+                {annot.toolType === "highlight" && (
                   <div
-                    className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
-                    style={{
-                      borderColor: annot.color,
-                      borderStyle:
-                        annot.underlineStyle === "dashed" ? "dashed" : "solid",
-                    }}
+                    className="h-full w-full rounded-[2px]"
+                    style={{ backgroundColor: annot.color }}
                   />
-                ))}
-            </div>
-          ))}
-        </div>
-      ))}
+                )}
+                {annot.toolType === "strikethrough" && (
+                  <div
+                    className="absolute inset-x-0 top-1/2 h-[1.5px] -translate-y-1/2"
+                    style={{ backgroundColor: annot.color }}
+                  />
+                )}
+                {annot.toolType === "underline" &&
+                  (annot.underlineStyle === "squiggle" ? (
+                    <svg
+                      viewBox="0 0 100 8"
+                      preserveAspectRatio="none"
+                      className="absolute inset-x-0 bottom-0 h-[4px] w-full"
+                    >
+                      <path
+                        d="M0 4 Q 6 0, 12 4 T 24 4 T 36 4 T 48 4 T 60 4 T 72 4 T 84 4 T 96 4 T 100 4"
+                        fill="none"
+                        stroke={annot.color}
+                        strokeWidth="2"
+                      />
+                    </svg>
+                  ) : (
+                    <div
+                      className="absolute inset-x-0 bottom-0 h-0 border-b-[2px]"
+                      style={{
+                        borderColor: annot.color,
+                        borderStyle:
+                          annot.underlineStyle === "dashed"
+                            ? "dashed"
+                            : "solid",
+                      }}
+                    />
+                  ))}
+              </div>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
-}
+});

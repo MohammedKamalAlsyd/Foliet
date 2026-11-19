@@ -1,4 +1,6 @@
+import { memo } from "react";
 import { ImagePlus, MessageSquare, X } from "lucide-react";
+import { getEraserPointerHandlers } from "@/components/viewer/layers/eraserHandlers";
 import { cn } from "@/lib/utils";
 import { insertFigureIntoSummary } from "@/services/figureCropper";
 import { useDocumentStore } from "@/stores/documentStore";
@@ -28,7 +30,7 @@ interface CropAndNoteLayerProps {
   onDismissQuickInsert: () => void;
 }
 
-export function CropAndNoteLayer({
+export const CropAndNoteLayer = memo(function CropAndNoteLayer({
   noteAnnotations,
   cropRect,
   quickInsertCrop,
@@ -91,17 +93,7 @@ export function CropAndNoteLayer({
         <button
           key={note.id}
           type="button"
-          onPointerDown={(e) => {
-            if (isEraser && e.button === 0) {
-              e.stopPropagation();
-              onDeleteAnnotation(note.id);
-            }
-          }}
-          onPointerEnter={(e) => {
-            if (isEraser && e.buttons === 1) {
-              onDeleteAnnotation(note.id);
-            }
-          }}
+          {...getEraserPointerHandlers(isEraser, note.id, onDeleteAnnotation)}
           onClick={(e) => {
             e.stopPropagation();
             if (!isEraser) onNoteClick(note, { x: e.clientX, y: e.clientY });
@@ -122,4 +114,4 @@ export function CropAndNoteLayer({
       ))}
     </>
   );
-}
+});

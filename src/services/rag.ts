@@ -22,7 +22,80 @@ import type {
     RagSearchResult,
 } from "@/types/embedding";
 
+interface CachedDocumentChunks {
+    chunks: DocumentChunk[];
+    byPage: Map<number, DocumentChunk[]>;
+}
+
+const MAX_CACHED_CHUNK_DOCS = 4;
+
 export class RagService {
+    private static chunkCache = new Map<string, CachedDocumentChunks>();
+    private static inFlightChunkRequests = new Map<string, Promise<CachedDocumentChunks>>();
+
+    private static buildChunkCacheEntry(chunks: DocumentChunk[]): CachedDocumentChunks {
+        const byPage = new Map<number, DocumentChunk[]>();
+        for (const chunk of chunks) {
+            const list = byPage.get(chunk.pageNumber);
+            if (list) list.push(chunk);
+            else byPage.set(chunk.pageNumber, [chunk]);
+        }
+        for (const list of byPage.values()) {
+            list.sort((a, b) => a.chunkIndex - b.chunkIndex);
+        }
+        return { chunks, byPage };
+    }
+
+    private static setChunkCache(docId: string, entry: CachedDocumentChunks): void {
+        if (this.chunkCache.has(docId)) {
+            this.chunkCache.delete(docId);
+        }
+        this.chunkCache.set(docId, entry);
+        while (this.chunkCache.size > MAX_CACHED_CHUNK_DOCS) {
+            const oldestKey = this.chunkCache.keys().next().value;
+            if (oldestKey === undefined) break;
+            this.chunkCache.delete(oldestKey);
+        }
+    }
+
+    public static invalidateDocumentChunks(docId?: string): void {
+        if (!docId) {
+            this.chunkCache.clear();
+            return;
+        }
+        this.chunkCache.delete(docId);
+    }
+
+    private static async getCachedDocumentChunksEntry(
+        docId: string,
+        forceRefresh = false
+    ): Promise<CachedDocumentChunks> {
+        if (!forceRefresh) {
+            const cached = this.chunkCache.get(docId);
+            if (cached) {
+                this.chunkCache.delete(docId);
+                this.chunkCache.set(docId, cached);
+                return cached;
+            }
+            const inFlight = this.inFlightChunkRequests.get(docId);
+            if (inFlight) return inFlight;
+        }
+
+        const req = invoke<DocumentChunk[]>("rag_get_document_chunks", { docId })
+            .then((chunks) => {
+                const entry = this.buildChunkCacheEntry(chunks);
+                this.setChunkCache(docId, entry);
+                return entry;
+            })
+            .finally(() => {
+                if (this.inFlightChunkRequests.get(docId) === req) {
+                    this.inFlightChunkRequests.delete(docId);
+                }
+            });
+
+        this.inFlightChunkRequests.set(docId, req);
+        return req;
+    }
     /**
      * Checks availability and download status for the specified embedding model.
      */
@@ -97,17 +170,21 @@ export class RagService {
         config: RagHyperparameters,
         embeddingConfig: EmbeddingConfig
     ): Promise<{ chunkCount: number }> {
-        return invoke<{ chunkCount: number }>("rag_index_document", {
+        this.invalidateDocumentChunks(scope.docId);
+        const result = await invoke<{ chunkCount: number }>("rag_index_document", {
             scope,
             config,
             embeddingConfig,
         });
+        this.invalidateDocumentChunks(scope.docId);
+        return result;
     }
 
     /**
      * Removes a document's vector index and catalog entry from `rag.db`.
      */
     public static async removeDocumentIndex(docId: string): Promise<void> {
+        this.invalidateDocumentChunks(docId);
         await invoke("rag_remove_document_index", { docId });
     }
 
@@ -119,10 +196,38 @@ export class RagService {
     }
 
     /**
-     * Retrieves all indexed chunks for a specific document.
+     * Retrieves all indexed chunks for a specific document (cached per docId).
      */
-    public static async getDocumentChunks(docId: string): Promise<DocumentChunk[]> {
-        return invoke<DocumentChunk[]>("rag_get_document_chunks", { docId });
+    public static async getDocumentChunks(
+        docId: string,
+        options?: { forceRefresh?: boolean }
+    ): Promise<DocumentChunk[]> {
+        const entry = await this.getCachedDocumentChunksEntry(
+            docId,
+            options?.forceRefresh ?? false
+        );
+        return entry.chunks;
+    }
+
+    /**
+     * Retrieves indexed chunks scoped to `[startPage, endPage]` using the
+     * per-document page index cache so citation clicks avoid repeated IPC calls.
+     */
+    public static async getPageChunks(
+        docId: string,
+        startPage: number,
+        endPage = startPage
+    ): Promise<DocumentChunk[]> {
+        const entry = await this.getCachedDocumentChunksEntry(docId);
+        if (startPage === endPage) {
+            return entry.byPage.get(startPage) ?? [];
+        }
+        const results: DocumentChunk[] = [];
+        for (let page = startPage; page <= endPage; page++) {
+            const pageList = entry.byPage.get(page);
+            if (pageList) results.push(...pageList);
+        }
+        return results;
     }
 
     /**

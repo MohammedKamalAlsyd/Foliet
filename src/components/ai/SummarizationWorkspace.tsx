@@ -10,6 +10,7 @@
  */
 
 import React, {
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -17,8 +18,6 @@ import React, {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { save } from "@tauri-apps/plugin-dialog";
-import { writeFile } from "@tauri-apps/plugin-fs";
 import { toast } from "sonner";
 import {
   BookOpen,
@@ -28,6 +27,7 @@ import {
   FileText,
   Globe,
   ListTree,
+  Loader2,
   MessageSquare,
   RotateCcw,
   Send,
@@ -37,14 +37,9 @@ import {
   X,
 } from "lucide-react";
 import { AiMascot, type MascotState } from "@/components/ai/AiMascot";
-import {
-  SummaryDocsEditor,
-  clearResolvedCropCache,
-  resolveMarkdownCropImages,
-  type SummaryDocsEditorHandle,
-} from "@/components/ai/SummaryDocsEditor";
+import type { SummaryDocsEditorHandle } from "@/components/ai/SummaryDocsEditor";
 import { Button } from "@/components/ui/button";
-import { exportSummaryToDocx } from "@/services/docxExport";
+import { clearResolvedCropCache } from "@/services/cropResolver";
 import type { SummaryFocusMode } from "@/services/llm";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
@@ -54,6 +49,12 @@ import { useSummaryStore } from "@/stores/summaryStore";
 import { isCropAnnotation, type PdfAnnotation } from "@/types/annotations";
 import { resolveCropUri } from "@/utils/llmFormatting";
 import { cn } from "@/lib/utils";
+
+const LazySummaryDocsEditor = React.lazy(() =>
+  import("@/components/ai/SummaryDocsEditor").then((m) => ({
+    default: m.SummaryDocsEditor,
+  })),
+);
 
 interface SummarizationWorkspaceProps {
   annotations?: PdfAnnotation[];
@@ -468,21 +469,14 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       return;
     }
 
-    const safeName = docTitle
-      .replace(/\.pdf$/i, "")
-      .replace(/[^a-zA-Z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-
     try {
-      const targetPath = await save({
-        defaultPath: `${safeName || "summary"}-notes.md`,
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
-      if (!targetPath) return;
-
-      const exportContent = await resolveMarkdownCropImages(rawMd);
-      await writeFile(targetPath, new TextEncoder().encode(exportContent));
-      toast.success("Exported Markdown");
+      const { exportSummaryToMarkdown } = await import(
+        "@/services/summaryExport"
+      );
+      const exported = await exportSummaryToMarkdown(rawMd, docTitle);
+      if (exported) {
+        toast.success("Exported Markdown");
+      }
     } catch (err: any) {
       console.error("Failed to export Markdown", err);
       toast.error(err?.message || "Failed to export Markdown");
@@ -496,6 +490,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       return;
     }
     try {
+      const { exportSummaryToDocx } = await import("@/services/summaryExport");
       const exported = await exportSummaryToDocx(rawMd, docTitle);
       if (exported) {
         toast.success("Exported Word document (.docx)");
@@ -692,13 +687,22 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
 
       {/* Central Living Markdown Editor */}
       <main className="min-h-0 flex-1 overflow-hidden">
-        <SummaryDocsEditor
-          ref={editorRef}
-          markdown={draftMarkdown}
-          isStreaming={isSummarizing}
-          onMarkdownChange={handleEditorMarkdownChange}
-          onJumpToPage={handleJumpToPage}
-        />
+        <Suspense
+          fallback={
+            <div className="flex h-full items-center justify-center gap-2 bg-background text-xs text-muted-foreground">
+              <Loader2 size={14} className="animate-spin" />
+              <span>Loading summary editor…</span>
+            </div>
+          }
+        >
+          <LazySummaryDocsEditor
+            ref={editorRef}
+            markdown={draftMarkdown}
+            isStreaming={isSummarizing}
+            onMarkdownChange={handleEditorMarkdownChange}
+            onJumpToPage={handleJumpToPage}
+          />
+        </Suspense>
       </main>
 
       {/* Compact Bottom Control Dock */}

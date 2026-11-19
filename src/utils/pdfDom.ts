@@ -39,7 +39,7 @@ function getPageElements(pageNumber: number): {
 export function readDomPageText(pageNumber: number): string {
     const els = getPageElements(pageNumber);
     if (!els) return "";
-    return (els.textLayer.innerText || els.textLayer.textContent || "")
+    return (els.textLayer.textContent || "")
         .replace(/\s+/g, " ")
         .trim();
 }
@@ -151,10 +151,7 @@ export async function getPageRagChunks(
 ): Promise<DocumentChunk[]> {
     if (!docId) return [];
     try {
-        const chunks = await RagService.getDocumentChunks(docId);
-        return chunks
-            .filter((c) => c.pageNumber >= startPage && c.pageNumber <= endPage)
-            .sort((a, b) => a.pageNumber - b.pageNumber || a.chunkIndex - b.chunkIndex);
+        return await RagService.getPageChunks(docId, startPage, endPage);
     } catch {
         return [];
     }

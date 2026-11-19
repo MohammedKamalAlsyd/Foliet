@@ -47,23 +47,28 @@ export const AiMascot = memo(function AiMascot({
     const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean>(false);
 
     const dim = resolveSize(size);
+    const isStaticIdle = !interactive && state === "idle";
 
-    // Detect prefers-reduced-motion
+    // Detect prefers-reduced-motion (skipped for static idle avatars)
     useEffect(() => {
-        if (typeof window === "undefined") return;
+        if (isStaticIdle || typeof window === "undefined") return;
         const media = window.matchMedia("(prefers-reduced-motion: reduce)");
         setPrefersReducedMotion(media.matches);
 
         const listener = (e: MediaQueryListEvent) => setPrefersReducedMotion(e.matches);
         media.addEventListener("change", listener);
         return () => media.removeEventListener("change", listener);
-    }, []);
+    }, [isStaticIdle]);
 
-    // Natural random eye blink interval
+    // Natural random eye blink interval (skipped for static idle avatars)
     useEffect(() => {
-        if (prefersReducedMotion || state === "happy") return;
+        if (isStaticIdle || prefersReducedMotion || state === "happy") {
+            setIsBlinking(false);
+            return;
+        }
 
         let blinkTimeout: ReturnType<typeof setTimeout>;
+        let unblinkTimeout: ReturnType<typeof setTimeout> | undefined;
         let isMounted = true;
 
         const scheduleBlink = () => {
@@ -71,7 +76,7 @@ export const AiMascot = memo(function AiMascot({
             blinkTimeout = setTimeout(() => {
                 if (!isMounted) return;
                 setIsBlinking(true);
-                setTimeout(() => {
+                unblinkTimeout = setTimeout(() => {
                     if (isMounted) {
                         setIsBlinking(false);
                         scheduleBlink();
@@ -84,8 +89,9 @@ export const AiMascot = memo(function AiMascot({
         return () => {
             isMounted = false;
             clearTimeout(blinkTimeout);
+            if (unblinkTimeout !== undefined) clearTimeout(unblinkTimeout);
         };
-    }, [prefersReducedMotion, state]);
+    }, [isStaticIdle, prefersReducedMotion, state]);
 
     // Pointer tracking for pupils & head angle
     useEffect(() => {
@@ -150,9 +156,9 @@ export const AiMascot = memo(function AiMascot({
             aria-label={`Lio AI Mascot (${state})`}
             className={cn(
                 "inline-block select-none overflow-visible transition-transform duration-200 ease-out",
-                !prefersReducedMotion && state === "idle" && "animate-[lio-breathe_3.8s_ease-in-out_infinite]",
-                !prefersReducedMotion && state === "thinking" && "animate-[lio-think_1.8s_ease-in-out_infinite]",
-                !prefersReducedMotion && state === "speaking" && "animate-[lio-speak_0.9s_ease-in-out_infinite]",
+                !prefersReducedMotion && !isStaticIdle && state === "idle" && "lio-mascot-animated animate-[lio-breathe_3.8s_ease-in-out_infinite]",
+                !prefersReducedMotion && state === "thinking" && "lio-mascot-animated animate-[lio-think_1.8s_ease-in-out_infinite]",
+                !prefersReducedMotion && state === "speaking" && "lio-mascot-animated animate-[lio-speak_0.9s_ease-in-out_infinite]",
                 className
             )}
             style={{
@@ -161,28 +167,6 @@ export const AiMascot = memo(function AiMascot({
             }}
             {...rest}
         >
-            <style>
-                {`
-                @keyframes lio-breathe {
-                    0%, 100% { transform: translateY(0); }
-                    50% { transform: translateY(-1.2px); }
-                }
-                @keyframes lio-think {
-                    0%, 100% { transform: translateY(0) scale(1); }
-                    50% { transform: translateY(-1.5px) scale(1.02); }
-                }
-                @keyframes lio-speak {
-                    0%, 100% { transform: translateY(0) scaleY(1); }
-                    35% { transform: translateY(-0.8px) scaleY(1.04); }
-                    70% { transform: translateY(0.4px) scaleY(0.98); }
-                }
-                @keyframes lio-sparkle {
-                    0%, 100% { opacity: 0.25; transform: scale(0.8) rotate(0deg); }
-                    50% { opacity: 1; transform: scale(1.15) rotate(45deg); }
-                }
-                `}
-            </style>
-
             {/* Subtle soft ground shadow */}
             <ellipse
                 cx="24"

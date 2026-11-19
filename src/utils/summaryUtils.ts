@@ -1,3 +1,4 @@
+import { resolveCropImageSrc } from "@/services/cropResolver";
 import type {
     SummaryChatTakeawayInput,
     SummaryCropInput,
@@ -26,33 +27,79 @@ export interface AiSummaryState {
     updatedAt: number;
 }
 
-const backupKey = (docId: string) => `foliet:summary-prev:${docId}`;
+const legacyBackupKey = (docId: string) => `foliet:summary-prev:${docId}`;
 
-export function readPreviousSummaryBackup(docId: string): AiSummaryState | null {
+function readAndClearLegacyLocalBackup(docId: string): AiSummaryState | null {
+    if (typeof localStorage === "undefined") return null;
     try {
-        const raw = localStorage.getItem(backupKey(docId));
+        const key = legacyBackupKey(docId);
+        const raw = localStorage.getItem(key);
         if (!raw) return null;
+        localStorage.removeItem(key);
         const parsed = JSON.parse(raw) as AiSummaryState;
         return typeof parsed?.content === "string" && parsed.content.trim().length > 0
-            ? parsed
+            ? {
+                content: parsed.content,
+                sourceSnapshot: parsed.sourceSnapshot,
+                updatedAt: parsed.updatedAt || Date.now(),
+            }
             : null;
     } catch {
         return null;
     }
 }
 
-export function writePreviousSummaryBackup(
+export async function readPreviousSummaryBackup(
+    docId: string,
+): Promise<AiSummaryState | null> {
+    try {
+        const stored = await DocumentDatabase.getSummaryBackup(docId);
+        if (stored?.content?.trim()) {
+            return stored;
+        }
+
+        // One-time migration from legacy localStorage snapshot into SQLite
+        const legacy = readAndClearLegacyLocalBackup(docId);
+        if (legacy) {
+            await DocumentDatabase.saveSummaryBackup(
+                docId,
+                legacy.content,
+                legacy.sourceSnapshot,
+                legacy.updatedAt,
+            ).catch(() => {});
+            return legacy;
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export async function writePreviousSummaryBackup(
     docId: string,
     summary: AiSummaryState | null,
-): void {
+): Promise<void> {
+    if (typeof localStorage !== "undefined") {
+        try {
+            localStorage.removeItem(legacyBackupKey(docId));
+        } catch {
+            // Ignore storage access errors
+        }
+    }
+
     try {
         if (!summary || !summary.content.trim()) {
-            localStorage.removeItem(backupKey(docId));
+            await DocumentDatabase.deleteSummaryBackup(docId);
         } else {
-            localStorage.setItem(backupKey(docId), JSON.stringify(summary));
+            await DocumentDatabase.saveSummaryBackup(
+                docId,
+                summary.content,
+                summary.sourceSnapshot,
+                summary.updatedAt,
+            );
         }
     } catch {
-        // Ignore storage quota errors
+        // Ignore persistence errors for backup snapshots
     }
 }
 
@@ -70,7 +117,7 @@ export async function resolvePreviousSnapshot(
         sourceSnapshot: existing.sourceSnapshot,
         updatedAt: existing.updatedAt || Date.now(),
     };
-    writePreviousSummaryBackup(docId, snapshot);
+    await writePreviousSummaryBackup(docId, snapshot);
     return snapshot;
 }
 
@@ -87,7 +134,7 @@ export async function resolveCropsForVision(crops: SummaryCropInput[]): Promise<
                 return { ...crop, resolvedDataUrl: crop.imageUrl };
             }
             if (/^(idb:\/\/|db:\/\/|crop-)/.test(crop.imageUrl)) {
-                const dataUrl = await DocumentDatabase.getFigureCrop(crop.imageUrl).catch(
+                const dataUrl = await resolveCropImageSrc(crop.imageUrl).catch(
                     () => null,
                 );
                 if (dataUrl?.startsWith("data:")) {

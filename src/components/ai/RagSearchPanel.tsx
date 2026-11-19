@@ -196,7 +196,7 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
   };
 
   const handleResultClick = (result: RagSearchResult) => {
-    setActiveRagHighlight(result);
+    setActiveRagHighlight({ ...result, highlightKind: "rag" });
 
     if (activeDoc && result.docId === activeDoc.id) {
       onJumpToPage(result.pageNumber);
@@ -571,7 +571,7 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
                 <Button
                   size="sm"
                   onClick={() => downloadLocalModel()}
-                  className="h-7 w-full gap-1.5 text-xs bg-[var(--accent-brand,#2563EB)] text-white hover:bg-[var(--accent-brand,#2563EB)]/90"
+                  className="h-7 w-full gap-1.5 text-xs bg-[var(--accent-brand,#2563EB)] text-[var(--accent-brand-fg)] hover:bg-[var(--accent-brand,#2563EB)]/90"
                 >
                   <Download size={13} />
                   <span>Download Local Model</span>
@@ -732,7 +732,7 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
                     needsLocalDownload ||
                     needsRemoteApiKey
                   }
-                  className="h-7 w-full gap-1.5 text-xs bg-[var(--accent-brand,#2563EB)] text-white hover:bg-[var(--accent-brand,#2563EB)]/90"
+                  className="h-7 w-full gap-1.5 text-xs bg-[var(--accent-brand,#2563EB)] text-[var(--accent-brand-fg)] hover:bg-[var(--accent-brand,#2563EB)]/90"
                 >
                   <Sparkles size={13} />
                   <span>Index Current PDF</span>
@@ -867,7 +867,8 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
                     const isCurrentDoc =
                       activeDoc && result.docId === activeDoc.id;
                     const isHighlighted =
-                      activeRagHighlight?.chunkId === result.chunkId;
+                      activeRagHighlight?.highlightKind === "rag" &&
+                      activeRagHighlight.chunkId === result.chunkId;
 
                     return (
                       <div

@@ -1,5 +1,6 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { getStroke } from "perfect-freehand";
+import { getEraserPointerHandlers } from "@/components/viewer/layers/eraserHandlers";
 import type { InkAnnotation, Point } from "@/types/annotations";
 
 interface InkLayerProps {
@@ -53,19 +54,21 @@ function buildFreehandPath(
   return getSvgPathFromStroke(stroke);
 }
 
-export function InkLayer({
+interface SavedInkPathsProps {
+  inkAnnotations: InkAnnotation[];
+  safeWidth: number;
+  safeHeight: number;
+  isEraser: boolean;
+  onDeleteAnnotation: (id: string) => void;
+}
+
+const SavedInkPaths = memo(function SavedInkPaths({
   inkAnnotations,
-  inkDraft,
-  activeColor,
-  activeStrokeWidth,
-  pageWidth,
-  pageHeight,
+  safeWidth,
+  safeHeight,
   isEraser,
   onDeleteAnnotation,
-}: InkLayerProps) {
-  const safeWidth = Math.max(1, pageWidth);
-  const safeHeight = Math.max(1, pageHeight);
-
+}: SavedInkPathsProps) {
   const savedPaths = useMemo(
     () =>
       inkAnnotations.map((annot) => ({
@@ -81,39 +84,18 @@ export function InkLayer({
     [inkAnnotations, safeWidth, safeHeight],
   );
 
-  const draftPath = useMemo(() => {
-    if (!inkDraft || inkDraft.length < 2) return "";
-    return buildFreehandPath(
-      inkDraft,
-      activeStrokeWidth,
-      safeWidth,
-      safeHeight,
-      false,
-    );
-  }, [inkDraft, activeStrokeWidth, safeWidth, safeHeight]);
-
   return (
-    <svg
-      viewBox={`0 0 ${safeWidth} ${safeHeight}`}
-      preserveAspectRatio="none"
-      className="pointer-events-none absolute inset-0 z-20 h-full w-full"
-    >
+    <>
       {savedPaths.map(({ annot, d }) => {
         if (!d) return null;
         return isEraser ? (
           <g
             key={annot.id}
-            onPointerDown={(e) => {
-              if (e.button === 0) {
-                e.stopPropagation();
-                onDeleteAnnotation(annot.id);
-              }
-            }}
-            onPointerEnter={(e) => {
-              if (e.buttons === 1) {
-                onDeleteAnnotation(annot.id);
-              }
-            }}
+            {...getEraserPointerHandlers(
+              true,
+              annot.id,
+              onDeleteAnnotation,
+            )}
             className="pointer-events-auto cursor-[inherit] hover:opacity-50"
           >
             <path d={d} fill={annot.color} stroke="none" />
@@ -128,8 +110,73 @@ export function InkLayer({
           <path key={annot.id} d={d} fill={annot.color} stroke="none" />
         );
       })}
+    </>
+  );
+});
 
-      {draftPath && <path d={draftPath} fill={activeColor} stroke="none" />}
+interface DraftInkPathProps {
+  inkDraft: Point[] | null;
+  activeColor: string;
+  activeStrokeWidth: number;
+  safeWidth: number;
+  safeHeight: number;
+}
+
+const DraftInkPath = memo(function DraftInkPath({
+  inkDraft,
+  activeColor,
+  activeStrokeWidth,
+  safeWidth,
+  safeHeight,
+}: DraftInkPathProps) {
+  const draftPath = useMemo(() => {
+    if (!inkDraft || inkDraft.length < 2) return "";
+    return buildFreehandPath(
+      inkDraft,
+      activeStrokeWidth,
+      safeWidth,
+      safeHeight,
+      false,
+    );
+  }, [inkDraft, activeStrokeWidth, safeWidth, safeHeight]);
+
+  if (!draftPath) return null;
+  return <path d={draftPath} fill={activeColor} stroke="none" />;
+});
+
+export const InkLayer = memo(function InkLayer({
+  inkAnnotations,
+  inkDraft,
+  activeColor,
+  activeStrokeWidth,
+  pageWidth,
+  pageHeight,
+  isEraser,
+  onDeleteAnnotation,
+}: InkLayerProps) {
+  const safeWidth = Math.max(1, pageWidth);
+  const safeHeight = Math.max(1, pageHeight);
+
+  return (
+    <svg
+      viewBox={`0 0 ${safeWidth} ${safeHeight}`}
+      preserveAspectRatio="none"
+      className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+    >
+      <SavedInkPaths
+        inkAnnotations={inkAnnotations}
+        safeWidth={safeWidth}
+        safeHeight={safeHeight}
+        isEraser={isEraser}
+        onDeleteAnnotation={onDeleteAnnotation}
+      />
+      <DraftInkPath
+        inkDraft={inkDraft}
+        activeColor={activeColor}
+        activeStrokeWidth={activeStrokeWidth}
+        safeWidth={safeWidth}
+        safeHeight={safeHeight}
+      />
     </svg>
   );
-}
+});

@@ -6,18 +6,16 @@
  * pane alongside the live PDF viewer inside ViewerView's ResizablePanelGroup.
  */
 
-import React, { useEffect, useMemo } from "react";
+import React, { Suspense, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   CheckCircle2,
   Database,
   FileText,
+  Loader2,
   MessageSquare,
   X,
 } from "lucide-react";
-import { AiChatPanel } from "@/components/ai/AiChatPanel";
-import { RagSearchPanel } from "@/components/ai/RagSearchPanel";
-import { SummarizationWorkspace } from "@/components/ai/SummarizationWorkspace";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAiStudioStore } from "@/stores/aiStudioStore";
@@ -30,6 +28,31 @@ import {
   isTextMarkupAnnotation,
   type PdfAnnotation,
 } from "@/types/annotations";
+
+const LazyAiChatPanel = React.lazy(() =>
+  import("@/components/ai/AiChatPanel").then((m) => ({
+    default: m.AiChatPanel,
+  })),
+);
+const LazyRagSearchPanel = React.lazy(() =>
+  import("@/components/ai/RagSearchPanel").then((m) => ({
+    default: m.RagSearchPanel,
+  })),
+);
+const LazySummarizationWorkspace = React.lazy(() =>
+  import("@/components/ai/SummarizationWorkspace").then((m) => ({
+    default: m.SummarizationWorkspace,
+  })),
+);
+
+const PanelFallback: React.FC<{ label?: string }> = ({
+  label = "Loading…",
+}) => (
+  <div className="flex h-full w-full items-center justify-center gap-2 bg-background text-xs text-muted-foreground">
+    <Loader2 size={14} className="animate-spin" />
+    <span>{label}</span>
+  </div>
+);
 
 interface AiStudioSidebarProps {
   isOpen: boolean;
@@ -100,10 +123,12 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
 
   if (isSummaryWorkspaceOpen) {
     return (
-      <SummarizationWorkspace
-        annotations={annotations}
-        onJumpToPage={onJumpToPage}
-      />
+      <Suspense fallback={<PanelFallback label="Loading summary workspace…" />}>
+        <LazySummarizationWorkspace
+          annotations={annotations}
+          onJumpToPage={onJumpToPage}
+        />
+      </Suspense>
     );
   }
 
@@ -164,12 +189,16 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
 
         {/* Tab 1: Persistent Chat */}
         <TabsContent value="chat" className="m-0 flex-1 overflow-hidden p-0">
-          <AiChatPanel onJumpToPage={onJumpToPage} />
+          <Suspense fallback={<PanelFallback label="Loading chat…" />}>
+            <LazyAiChatPanel onJumpToPage={onJumpToPage} />
+          </Suspense>
         </TabsContent>
 
         {/* Tab 2: RAG Search */}
         <TabsContent value="search" className="m-0 flex-1 overflow-hidden p-0">
-          <RagSearchPanel onJumpToPage={onJumpToPage} />
+          <Suspense fallback={<PanelFallback label="Loading RAG search…" />}>
+            <LazyRagSearchPanel onJumpToPage={onJumpToPage} />
+          </Suspense>
         </TabsContent>
 
         {/* Tab 3: Summarization Studio Launch Panel */}

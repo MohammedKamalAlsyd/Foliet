@@ -6,7 +6,6 @@
  * SummaryDocsEditor (`[Page X]` / `(Page X)` decorations).
  */
 
-import { RagService } from "@/services/rag";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useRagStore } from "@/stores/ragStore";
 import type { Rect } from "@/types/common";
@@ -17,6 +16,18 @@ import {
     resolvePassageRects,
     waitForRenderedPage,
 } from "@/utils/pdfDom";
+
+/**
+ * Shared `[Page X]` / `[Chapter 2, Page X]` / `(Page X)` citation regex used
+ * across AiChatPanel, SummaryDocsEditor, summaryExport, and citationSpotlight.
+ * Capture groups:
+ *   1: full bracket citation (e.g. `[Page 4]` or `[Ch. 2, Page 4]`)
+ *   2: page number from bracket citation
+ *   3: full parenthesized citation (e.g. `(Page 4)`)
+ *   4: page number from parenthesized citation
+ */
+export const PAGE_CITATION_REGEX =
+    /(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])(?!\()|(\(Page\s+(\d+)\))/gi;
 
 export interface CitationSpotlightOptions {
     pageNumber: number;
@@ -165,7 +176,7 @@ function findFirstSentenceEnd(slice: string): number {
 
 function stripCitationsAndMarkdown(raw: string): string {
     return raw
-        .replace(/\[(?:[^\]\n]*?,\s*)?Page\s+\d+\]|\(Page\s+\d+\)/gi, " ")
+        .replace(PAGE_CITATION_REGEX, " ")
         .replace(/```[\s\S]*?```/g, " ")
         .replace(/`([^`\n]+)`/g, "$1")
         .replace(/[*_~>#]+/g, " ")
@@ -318,21 +329,13 @@ export async function jumpAndSpotlightCitation(
                 `Citation on Page ${pageNumber}`,
             similarityScore: 1.0,
             rectSegments: options.rectSegments,
+            highlightKind: "citation",
         });
         return;
     }
 
-    // 2. Fetch document chunks for this page (if indexed)
-    const pageChunks = await getPageRagChunks(targetDocId, pageNumber).catch(
-        async () => {
-            try {
-                const allChunks = await RagService.getDocumentChunks(targetDocId);
-                return allChunks.filter((c) => c.pageNumber === pageNumber);
-            } catch {
-                return [];
-            }
-        },
-    );
+    // 2. Fetch document chunks for this page (if indexed, served from RagService page cache)
+    const pageChunks = await getPageRagChunks(targetDocId, pageNumber);
 
     // 3. Exact chunkId lookup (e.g. persisted Sources chips without inline rectSegments)
     if (options.chunkId && pageChunks.length > 0) {
@@ -355,6 +358,7 @@ export async function jumpAndSpotlightCitation(
                 text: exactChunk.text,
                 similarityScore: 1.0,
                 rectSegments: rects && rects.length > 0 ? rects : undefined,
+                highlightKind: "citation",
             });
             return;
         }
@@ -388,6 +392,7 @@ export async function jumpAndSpotlightCitation(
                     text: candidate,
                     similarityScore: 1.0,
                     rectSegments: rects,
+                    highlightKind: "citation",
                 });
                 return;
             }
@@ -413,6 +418,7 @@ export async function jumpAndSpotlightCitation(
                 text: bestChunk.text,
                 similarityScore: 1.0,
                 rectSegments: rects && rects.length > 0 ? rects : undefined,
+                highlightKind: "citation",
             });
             return;
         }
@@ -429,5 +435,6 @@ export async function jumpAndSpotlightCitation(
             cleanedContext ||
             `Citation on Page ${pageNumber}`,
         similarityScore: 1.0,
+        highlightKind: "citation",
     });
 }

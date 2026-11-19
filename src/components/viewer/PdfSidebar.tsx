@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
-import { DocumentDatabase } from "@/services/storage/database";
+import { getCachedCrop, resolveCropImageSrc } from "@/services/cropResolver";
 import type { CropAnnotation } from "@/types/annotations";
 import type { BookmarkItem, PdfOutlineNode } from "@/types/document";
 
@@ -123,21 +123,32 @@ function OutlineItem({
 }
 
 function CropThumbnail({ crop }: { crop: CropAnnotation }) {
-  const [src, setSrc] = useState<string | null>(
-    crop.imageUrl.startsWith("data:") ? crop.imageUrl : null,
-  );
+  const cropSrcKey = crop.imageUrl || crop.id;
+  const [src, setSrc] = useState<string | null>(() => {
+    if (crop.imageUrl.startsWith("data:")) return crop.imageUrl;
+    return getCachedCrop(cropSrcKey);
+  });
 
   useEffect(() => {
     let active = true;
-    if (crop.imageUrl.startsWith("idb://")) {
-      DocumentDatabase.getFigureCrop(crop.id).then((data) => {
-        if (active && data) setSrc(data);
-      });
+    if (crop.imageUrl.startsWith("data:")) {
+      setSrc(crop.imageUrl);
+      return;
     }
+
+    const cached = getCachedCrop(cropSrcKey);
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
+
+    resolveCropImageSrc(cropSrcKey).then((data) => {
+      if (active && data) setSrc(data);
+    });
     return () => {
       active = false;
     };
-  }, [crop.id, crop.imageUrl]);
+  }, [cropSrcKey, crop.imageUrl]);
 
   if (!src) {
     return (

@@ -70,6 +70,12 @@ export class DocumentDatabase {
                     source_snapshot TEXT,
                     updated_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS doc_summary_backups (
+                    doc_id TEXT PRIMARY KEY,
+                    content TEXT NOT NULL,
+                    source_snapshot TEXT,
+                    updated_at INTEGER NOT NULL
+                );
             `);
             return db;
         })().catch((err) => {
@@ -279,6 +285,38 @@ export class DocumentDatabase {
         return this.execute("DELETE FROM doc_summaries WHERE doc_id = $1", [docId]);
     }
 
+    public static async getSummaryBackup(
+        docId: string,
+    ): Promise<{ content: string; sourceSnapshot?: string; updatedAt: number } | null> {
+        const rows = await this.query<SummaryRow>(
+            "SELECT doc_id, content, source_snapshot, updated_at FROM doc_summary_backups WHERE doc_id = $1",
+            [docId],
+            "summary backup",
+        );
+        if (!rows[0]) return null;
+        return {
+            content: rows[0].content,
+            sourceSnapshot: rows[0].source_snapshot ?? undefined,
+            updatedAt: Number(rows[0].updated_at),
+        };
+    }
+
+    public static saveSummaryBackup(
+        docId: string,
+        content: string,
+        sourceSnapshot?: string,
+        updatedAt?: number,
+    ): Promise<void> {
+        return this.execute(
+            `INSERT OR REPLACE INTO doc_summary_backups (doc_id, content, source_snapshot, updated_at) VALUES ($1, $2, $3, $4)`,
+            [docId, content, sourceSnapshot ?? null, updatedAt ?? Date.now()],
+        );
+    }
+
+    public static deleteSummaryBackup(docId: string): Promise<void> {
+        return this.execute("DELETE FROM doc_summary_backups WHERE doc_id = $1", [docId]);
+    }
+
     // =========================================================================
     // Lifecycle / Cleanup
     // =========================================================================
@@ -289,7 +327,8 @@ export class DocumentDatabase {
              DELETE FROM doc_bookmarks WHERE doc_id = $1;
              DELETE FROM figure_crops WHERE doc_id = $1;
              DELETE FROM chat_conversations WHERE doc_id = $1;
-             DELETE FROM doc_summaries WHERE doc_id = $1;`,
+             DELETE FROM doc_summaries WHERE doc_id = $1;
+             DELETE FROM doc_summary_backups WHERE doc_id = $1;`,
             [docId],
         );
     }
@@ -301,6 +340,7 @@ export class DocumentDatabase {
             DELETE FROM figure_crops;
             DELETE FROM chat_conversations;
             DELETE FROM doc_summaries;
+            DELETE FROM doc_summary_backups;
         `);
     }
 }

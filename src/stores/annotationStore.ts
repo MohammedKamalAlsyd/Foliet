@@ -2,6 +2,7 @@ import { create, useStore } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { temporal, type TemporalState } from "zundo";
 import { toast } from "sonner";
+import { clearResolvedCropCache } from "@/services/cropResolver";
 import { PdfService } from "@/services/pdf";
 import { DocumentCatalogStorage } from "@/services/storage/catalog";
 import { DocumentDatabase } from "@/services/storage/database";
@@ -191,6 +192,7 @@ export const useAnnotationStore = create<AnnotationState>()(
 
             deleteCrop: async (id, targetDocId) => {
                 const docId = targetDocId ?? get().docId;
+                clearResolvedCropCache(id);
                 await Promise.all([
                     DocumentDatabase.deleteFigureCrop(id),
                     docId ? DocumentDatabase.removeAnnotation(docId, id) : Promise.resolve(),
