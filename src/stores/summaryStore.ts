@@ -18,6 +18,10 @@ import type { ChatConversation } from "@/types/chat";
 import type { PdfChapter } from "@/types/document";
 import { isAbortError } from "@/utils/error";
 import {
+    buildModifySummaryPrompt,
+    buildSummarySystemPrompt,
+} from "@/utils/llmPrompts";
+import {
     type AiSummaryState,
     collectRangeContext,
     fetchRangeText,
@@ -336,12 +340,14 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 chapter,
                 annotations,
                 conversations,
-                includeNotes = true,
+                includeNotes = false,
                 includeChats = false,
                 webSearchEnabled = false,
             },
         ) => {
             const { summaryFocusMode, activeSummary } = get();
+            const llm = useAiConfigStore.getState().getActiveLlmConfig();
+            const activeWebSearch = llm.provider === "openrouter" && webSearchEnabled;
             const baseMarkdown = activeSummary?.content ?? "";
             let streamedChapter = "";
             const buildMerged = () =>
@@ -365,14 +371,16 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         conversations,
                         includeNotes,
                         includeChats,
+                        webSearchEnabled: activeWebSearch,
                     });
                     await streamPrompt({
                         prompt,
-                        systemPrompt: LlmService.buildSummarySystemPrompt(
-                            summaryFocusMode,
-                            docTitle,
-                        ),
-                        webSearchEnabled,
+                        systemPrompt: buildSummarySystemPrompt(summaryFocusMode, docTitle, {
+                            includeNotes,
+                            includeChats,
+                            webSearchEnabled: activeWebSearch,
+                        }),
+                        webSearchEnabled: activeWebSearch,
                         visionImages,
                         onChunk: (chunk) => {
                             streamedChapter += chunk;
@@ -393,7 +401,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 chapters,
                 annotations,
                 conversations,
-                includeNotes = true,
+                includeNotes = false,
                 includeChats = false,
                 webSearchEnabled = false,
             },
@@ -401,10 +409,13 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
             if (chapters.length === 0) return;
 
             const { summaryFocusMode } = get();
-            const systemPrompt = LlmService.buildSummarySystemPrompt(
-                summaryFocusMode,
-                docTitle,
-            );
+            const llm = useAiConfigStore.getState().getActiveLlmConfig();
+            const activeWebSearch = llm.provider === "openrouter" && webSearchEnabled;
+            const systemPrompt = buildSummarySystemPrompt(summaryFocusMode, docTitle, {
+                includeNotes,
+                includeChats,
+                webSearchEnabled: activeWebSearch,
+            });
             let runningMarkdown = `# ${docTitle}\n`;
 
             await runStreamedSummaryPipeline({
@@ -443,13 +454,14 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             conversations,
                             includeNotes,
                             includeChats,
+                            webSearchEnabled: activeWebSearch,
                         });
 
                         let chapterOutput = "";
                         await streamPrompt({
                             prompt,
                             systemPrompt,
-                            webSearchEnabled,
+                            webSearchEnabled: activeWebSearch,
                             visionImages,
                             onChunk: (chunk) => {
                                 chapterOutput += chunk;
@@ -489,12 +501,14 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                 annotations,
                 conversations,
                 jumpToPage,
-                includeNotes = true,
+                includeNotes = false,
                 includeChats = false,
                 webSearchEnabled = false,
             },
         ) => {
             const { summaryFocusMode } = get();
+            const llm = useAiConfigStore.getState().getActiveLlmConfig();
+            const activeWebSearch = llm.provider === "openrouter" && webSearchEnabled;
             let accumulated = "";
             let resetOnNextChunk = false;
 
@@ -534,7 +548,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         : undefined;
 
                     await streamPrompt({
-                        prompt: LlmService.buildModifySummaryPrompt({
+                        prompt: buildModifySummaryPrompt({
                             docTitle,
                             focusMode: summaryFocusMode,
                             existingMarkdown,
@@ -544,12 +558,16 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             notes: ctx.notes,
                             crops: enrichedCrops,
                             chatTakeaways: ctx.chatTakeaways,
+                            includeNotes,
+                            includeChats,
+                            webSearchEnabled: activeWebSearch,
                         }),
-                        systemPrompt: LlmService.buildSummarySystemPrompt(
-                            summaryFocusMode,
-                            docTitle,
-                        ),
-                        webSearchEnabled,
+                        systemPrompt: buildSummarySystemPrompt(summaryFocusMode, docTitle, {
+                            includeNotes,
+                            includeChats,
+                            webSearchEnabled: activeWebSearch,
+                        }),
+                        webSearchEnabled: activeWebSearch,
                         visionImages,
                         tools: buildSummaryTools({
                             docId,

@@ -9,6 +9,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
+import { toast } from "sonner";
 import { useShallow } from "zustand/react/shallow";
 import {
   ArrowUp,
@@ -39,17 +40,19 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
-import { RagService } from "@/services/rag";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
-import { useRagStore } from "@/stores/ragStore";
 import { LLM_PRESETS } from "@/constants/models";
 import type {
   CitationReference,
   ExecutedToolCall,
   LlmProvider,
 } from "@/types/chat";
+import {
+  extractSentenceAroundOffset,
+  jumpAndSpotlightCitation,
+} from "@/utils/citationSpotlight";
 import { cn } from "@/lib/utils";
 
 interface AiChatPanelProps {
@@ -59,65 +62,46 @@ interface AiChatPanelProps {
 const CITATION_PREPROCESS_RE =
   /(```[\s\S]*?```|`[^`\n]+`|\[[^\]\n]*\]\([^)\n]*\))|(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])(?!\()|(\(Page\s+(\d+)\))/gi;
 
-function preprocessCitations(content: string): string {
-  return content.replace(
+function preprocessCitations(content: string): {
+  markdown: string;
+  contexts: string[];
+} {
+  const contexts: string[] = [];
+  const markdown = content.replace(
     CITATION_PREPROCESS_RE,
-    (full, skip, bracketCite, bracketPage, parenCite, parenPage) => {
+    (
+      full,
+      skip,
+      bracketCite,
+      bracketPage,
+      parenCite,
+      parenPage,
+      offset: number,
+    ) => {
       if (skip) return full;
       const page = bracketPage ?? parenPage;
       const label = bracketCite ?? parenCite;
-      return `[${label}](#foliet-page-${page})`;
+      const idx = contexts.length;
+      contexts.push(
+        extractSentenceAroundOffset(content, offset, offset + full.length),
+      );
+      return `[${label}](#foliet-page-${page}-${idx})`;
     },
   );
-}
-
-async function jumpAndSpotlightPage(
-  pageNumber: number,
-  onJumpToPage: (page: number) => void,
-) {
-  onJumpToPage(pageNumber);
-  const activeDoc = useDocumentStore.getState().activeDoc;
-  if (!activeDoc) return;
-
-  try {
-    const chunks = await RagService.getDocumentChunks(activeDoc.id);
-    const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
-    if (pageChunks.length > 0) {
-      const mergedRects = pageChunks
-        .flatMap((c) => c.rectSegments ?? [])
-        .slice(0, 48);
-      useRagStore.getState().setActiveRagHighlight({
-        chunkId: pageChunks[0].chunkId,
-        docId: activeDoc.id,
-        docTitle: activeDoc.title,
-        pageNumber,
-        text: pageChunks[0].text,
-        similarityScore: 1.0,
-        rectSegments: mergedRects.length > 0 ? mergedRects : undefined,
-      });
-      return;
-    }
-  } catch {
-    // Fallback below if not indexed
-  }
-
-  useRagStore.getState().setActiveRagHighlight({
-    chunkId: `chat-citation-page-${pageNumber}`,
-    docId: activeDoc.id,
-    docTitle: activeDoc.title,
-    pageNumber,
-    text: `Citation on Page ${pageNumber}`,
-    similarityScore: 1.0,
-  });
+  return { markdown, contexts };
 }
 
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      toast.error("Failed to copy code to clipboard");
+    }
   };
 
   return (
@@ -126,7 +110,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         <span>{language}</span>
         <button
           type="button"
-          onClick={handleCopy}
+          onClick={() => void handleCopy()}
           className="flex items-center gap-1 hover:text-zinc-200"
         >
           {copied ? (
@@ -168,8 +152,11 @@ function FormattedMessageContent({
   citations?: CitationReference[];
   toolCalls?: ExecutedToolCall[];
 }) {
-  const markdownSource = useMemo(
-    () => (isUser ? content : preprocessCitations(content)),
+  const { markdown: markdownSource, contexts: citationContexts } = useMemo(
+    () =>
+      isUser
+        ? { markdown: content, contexts: [] }
+        : preprocessCitations(content),
     [content, isUser],
   );
 
@@ -239,13 +226,22 @@ function FormattedMessageContent({
         return <CodeBlock language={lang} code={raw} />;
       },
       a: ({ href, children }) => {
-        const pageMatch = /^#foliet-page-(\d+)$/.exec(href ?? "");
+        const pageMatch = /^#foliet-page-(\d+)(?:-(\d+))?$/.exec(href ?? "");
         if (pageMatch) {
           const pageNum = Number(pageMatch[1]);
+          const ctxIdx = pageMatch[2] !== undefined ? Number(pageMatch[2]) : -1;
+          const contextText =
+            ctxIdx >= 0 ? citationContexts[ctxIdx] : undefined;
           return (
             <button
               type="button"
-              onClick={() => void jumpAndSpotlightPage(pageNum, onJumpToPage)}
+              onClick={() =>
+                void jumpAndSpotlightCitation({
+                  pageNumber: pageNum,
+                  contextText,
+                  onJumpToPage,
+                })
+              }
               title={`Jump to Page ${pageNum}`}
               className="mx-0.5 inline-flex cursor-pointer items-center rounded border border-[var(--accent-brand,#2563EB)]/30 bg-[var(--accent-brand,#2563EB)]/10 px-1 py-0 align-baseline font-mono text-[10.5px] font-medium text-[var(--accent-brand,#2563EB)] transition-colors hover:bg-[var(--accent-brand,#2563EB)]/20"
             >
@@ -268,7 +264,7 @@ function FormattedMessageContent({
         );
       },
     }),
-    [isUser, onJumpToPage],
+    [isUser, onJumpToPage, citationContexts],
   );
 
   return (
@@ -320,17 +316,17 @@ function FormattedMessageContent({
             <button
               key={cIdx}
               type="button"
-              onClick={() => {
-                onJumpToPage(c.pageNumber);
-                useRagStore.getState().setActiveRagHighlight({
+              onClick={() =>
+                void jumpAndSpotlightCitation({
+                  pageNumber: c.pageNumber,
                   chunkId: c.chunkId,
                   docId: c.docId,
                   docTitle: c.docTitle,
-                  pageNumber: c.pageNumber,
-                  text: c.snippet,
-                  similarityScore: 1.0,
-                });
-              }}
+                  snippet: c.snippet,
+                  rectSegments: c.rectSegments,
+                  onJumpToPage,
+                })
+              }
               title={`Jump to Page ${c.pageNumber}: "${c.snippet.slice(0, 100)}..."`}
               className="inline-flex items-center gap-1 rounded-md border border-[var(--accent-brand,#2563EB)]/30 bg-[var(--accent-brand,#2563EB)]/5 px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--accent-brand,#2563EB)] transition-colors hover:bg-[var(--accent-brand,#2563EB)]/15 active:scale-95"
             >
@@ -521,7 +517,7 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
             <DropdownMenuSeparator />
             <div className="max-h-56 overflow-y-auto space-y-0.5">
               {conversations.map((c) => (
-                <div
+                <DropdownMenuItem
                   key={c.id}
                   onClick={() => setActiveConversationId(c.id)}
                   className={cn(
@@ -535,15 +531,16 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
                   <button
                     type="button"
                     onClick={(e) => {
+                      e.preventDefault();
                       e.stopPropagation();
                       deleteConversation(c.id);
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
+                    className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-muted-foreground hover:text-destructive transition-opacity"
                     title="Delete chat"
                   >
                     <Trash2 size={13} />
                   </button>
-                </div>
+                </DropdownMenuItem>
               ))}
             </div>
           </DropdownMenuContent>

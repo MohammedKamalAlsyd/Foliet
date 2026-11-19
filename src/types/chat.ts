@@ -1,7 +1,7 @@
 /**
  * Foliet - Chat, LLM & Reasoning Types
  */
-import type { ModelPreset } from "./common";
+import type { ModelPreset, Rect } from "./common";
 import type { EmbeddingProvider, RagHyperparameters } from "./embedding";
 
 export type LlmProvider =
@@ -13,6 +13,8 @@ export type LlmProvider =
 
 export interface LlmModelPreset extends ModelPreset<LlmProvider> {
     contextWindow: number;
+    supportsVision?: boolean;
+    maxOutputTokens?: number;
 }
 
 export type MessageRole = "system" | "user" | "assistant";
@@ -23,6 +25,7 @@ export interface CitationReference {
     docTitle: string;
     pageNumber: number;
     snippet: string;
+    rectSegments?: Rect[];
 }
 
 export type ToolCallName =

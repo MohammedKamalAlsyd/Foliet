@@ -14,6 +14,12 @@ import {
     formatSummaryContextBlocks,
 } from "@/utils/llmFormatting";
 
+export interface SummaryPromptFlags {
+    includeNotes?: boolean;
+    includeChats?: boolean;
+    webSearchEnabled?: boolean;
+}
+
 const CITATION_FORMAT_RULE =
     "Cite page numbers inline using bracketed format `[Page X]` (e.g., `[Page 4]`).";
 const FIGURE_SYNTAX_RULE =
@@ -28,7 +34,6 @@ const SUMMARY_MODE_GUIDANCE: Record<SummaryFocusMode, string> = {
         "STYLE MODE: Study Notes",
         "- Pedagogical, clear, and structured for deep retention and review.",
         "- Define core concepts, highlight intuition alongside key facts, and end chapters with concise takeaway bullets.",
-        "- Incorporate the user's personal notes and Lio Q&A clarifications where provided.",
     ].join("\n"),
     executive: [
         "STYLE MODE: Executive Brief",
@@ -100,17 +105,40 @@ export function buildRagSystemPrompt(
     ].join("\n");
 }
 
+function buildContextToggleGuidance(flags?: SummaryPromptFlags): string[] {
+    const lines: string[] = [];
+    if (flags?.includeNotes) {
+        lines.push(
+            "- USER ANNOTATIONS: Weave the user's supplied highlights, underlines, and personal sticky notes into the synthesis.",
+        );
+    }
+    if (flags?.includeChats) {
+        lines.push(
+            "- CHAT TAKEAWAYS: Incorporate relevant insights and clarifications from the supplied Lio Q&A takeaways.",
+        );
+    }
+    if (flags?.webSearchEnabled) {
+        lines.push(
+            "- WEB SEARCH: Live web search is enabled. You may integrate verified external context or follow-up developments by citing the external source/URL explicitly, while keeping `[Page X]` strictly for claims from the PDF.",
+        );
+    }
+    return lines;
+}
+
 export function buildSummarySystemPrompt(
     focusMode: SummaryFocusMode,
     docTitle: string,
+    flags?: SummaryPromptFlags,
 ): string {
+    const toggleGuidance = buildContextToggleGuidance(flags);
     return [
         `You are Foliet's scholarly synthesis assistant maintaining a Living Summary for "${docTitle}".`,
         "",
         SUMMARY_MODE_GUIDANCE[focusMode],
         "",
         "GLOBAL OUTPUT RULES:",
-        `- GROUNDING & CITATIONS: Anchor claims directly in the supplied source text and user annotations. ${CITATION_FORMAT_RULE}`,
+        `- GROUNDING & CITATIONS: Anchor claims directly in the supplied source text${flags?.includeNotes ? " and user annotations" : ""}. ${CITATION_FORMAT_RULE}`,
+        ...toggleGuidance,
         `- FIGURES: When figure crop URIs (\`idb://crop-...\`) are provided, ${FIGURE_SYNTAX_RULE}`,
         "- TOOL USAGE: If the user asks to include a figure from a page that does not yet have a crop URI, you may call `add_figure_to_summary`.",
         `- OUTPUT FORMAT: ${MARKDOWN_ONLY_RULE}`,
@@ -119,6 +147,23 @@ export function buildSummarySystemPrompt(
 
 export function buildChapterSummaryPrompt(input: ChapterSummaryInput): string {
     const contextBlocks = formatSummaryContextBlocks(input);
+    const contextNotices: string[] = [];
+    if (input.includeNotes && (input.highlights.length > 0 || input.notes.length > 0)) {
+        contextNotices.push(
+            "Incorporate the user's highlights and personal sticky notes provided below.",
+        );
+    }
+    if (input.includeChats && input.chatTakeaways.length > 0) {
+        contextNotices.push(
+            "Incorporate relevant clarifications from the saved Lio chat takeaways provided below.",
+        );
+    }
+    if (input.webSearchEnabled) {
+        contextNotices.push(
+            "Live web search is enabled to verify or enrich background references where helpful.",
+        );
+    }
+
     return [
         `Synthesize a structured Markdown summary section for the following chapter of "${input.docTitle}".`,
         `CHAPTER: "${input.chapterTitle}" (Pages ${input.startPage}–${input.endPage})`,
@@ -127,6 +172,7 @@ export function buildChapterSummaryPrompt(input: ChapterSummaryInput): string {
         `## ${input.chapterTitle}`,
         "",
         "Use `###` subheadings where helpful, bullet points for key mechanisms/results, and `[Page X]` citations throughout.",
+        ...contextNotices,
         "",
         "CHAPTER TEXT / EXCERPTS:",
         input.chapterText.trim() || "(No extractable text found in this page range.)",
@@ -142,11 +188,17 @@ export function buildModifySummaryPrompt(input: ModifySummaryInput): string {
             input.chapterContext.text.trim(),
         ].join("\n")
         : "";
+    const activeFlags = buildContextToggleGuidance({
+        includeNotes: input.includeNotes,
+        includeChats: input.includeChats,
+        webSearchEnabled: input.webSearchEnabled,
+    });
 
     return [
         "Modify or refine the EXISTING SUMMARY MARKDOWN below according to the USER INSTRUCTION.",
         "Preserve unaffected sections, headings, `[Page X]` citations, and existing `![...](idb://...)` image links unless the instruction explicitly asks to remove or rewrite them.",
         "Return the complete updated Markdown document only.",
+        ...activeFlags,
         "",
         `USER INSTRUCTION: ${input.instruction.trim()}`,
         "",

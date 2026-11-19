@@ -207,6 +207,7 @@ export async function prepareChapterPromptData(params: {
     conversations: ChatConversation[];
     includeNotes: boolean;
     includeChats: boolean;
+    webSearchEnabled?: boolean;
 }) {
     const chapterText = await fetchRangeText(
         params.docId,
@@ -232,6 +233,9 @@ export async function prepareChapterPromptData(params: {
         notes: ctx.notes,
         crops: enrichedCrops,
         chatTakeaways: ctx.chatTakeaways,
+        includeNotes: params.includeNotes,
+        includeChats: params.includeChats,
+        webSearchEnabled: params.webSearchEnabled,
     });
     return { prompt, visionImages };
 }

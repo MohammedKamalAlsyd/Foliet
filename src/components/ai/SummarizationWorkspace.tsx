@@ -39,6 +39,7 @@ import {
 import { AiMascot, type MascotState } from "@/components/ai/AiMascot";
 import {
   SummaryDocsEditor,
+  clearResolvedCropCache,
   resolveMarkdownCropImages,
   type SummaryDocsEditorHandle,
 } from "@/components/ai/SummaryDocsEditor";
@@ -50,7 +51,8 @@ import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useSummaryStore } from "@/stores/summaryStore";
-import type { PdfAnnotation } from "@/types/annotations";
+import { isCropAnnotation, type PdfAnnotation } from "@/types/annotations";
+import { resolveCropUri } from "@/utils/llmFormatting";
 import { cn } from "@/lib/utils";
 
 interface SummarizationWorkspaceProps {
@@ -130,6 +132,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveMarkdownRef = useRef<string | null>(null);
   const jumpMenuRef = useRef<HTMLDivElement | null>(null);
+  const prevCropKeysRef = useRef<{
+    docId?: string;
+    crops: Map<string, string[]>;
+  }>({ docId: undefined, crops: new Map() });
 
   const [fallbackAnnotations, setFallbackAnnotations] = useState<
     PdfAnnotation[]
@@ -174,6 +180,40 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     loadSummary,
     loadConversations,
   ]);
+
+  // Evict deleted crops from the resolved figure cache
+  useEffect(() => {
+    if (!liveAnnotations) return;
+    const nextCrops = new Map<string, string[]>();
+    for (const a of liveAnnotations) {
+      if (isCropAnnotation(a)) {
+        nextCrops.set(a.id, [
+          a.id,
+          a.imageUrl,
+          resolveCropUri(a.id, a.imageUrl),
+        ]);
+      }
+    }
+
+    if (prevCropKeysRef.current.docId === docId) {
+      for (const [prevId, keys] of prevCropKeysRef.current.crops) {
+        if (!nextCrops.has(prevId)) {
+          for (const key of keys) {
+            if (key) clearResolvedCropCache(key);
+          }
+        }
+      }
+    }
+
+    prevCropKeysRef.current = { docId, crops: nextCrops };
+  }, [docId, liveAnnotations]);
+
+  // Clear resolved figure cache on document change or workspace unmount
+  useEffect(() => {
+    return () => {
+      clearResolvedCropCache();
+    };
+  }, [docId]);
 
   // Sync store content into editor draft once loaded
   useEffect(() => {
@@ -332,6 +372,12 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       return;
     }
 
+    const contextFlags = {
+      includeNotes,
+      includeChats,
+      webSearchEnabled: llmProvider === "openrouter" && summaryWebSearch,
+    };
+
     try {
       if (mode === "full-book" || selectedChapterId === "all") {
         await generateFullBookSummary(docId, {
@@ -339,6 +385,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
           chapters,
           annotations: sourceAnnotations,
           conversations,
+          ...contextFlags,
         });
       } else if (selectedChapter) {
         await generateChapterSummary(docId, {
@@ -346,6 +393,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
           chapter: selectedChapter,
           annotations: sourceAnnotations,
           conversations,
+          ...contextFlags,
         });
       }
       pendingSaveMarkdownRef.current = null;
@@ -374,6 +422,9 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         annotations: sourceAnnotations,
         conversations,
         jumpToPage: onJumpToPage,
+        includeNotes,
+        includeChats,
+        webSearchEnabled: llmProvider === "openrouter" && summaryWebSearch,
       });
       pendingSaveMarkdownRef.current = null;
       setSaveStatus("saved");

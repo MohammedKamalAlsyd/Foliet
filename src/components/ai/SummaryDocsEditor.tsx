@@ -3,10 +3,10 @@
  *
  * MIT Tiptap editor configured with StarterKit, CodeBlockLowlight,
  * @tiptap/markdown, a custom CropAwareImage NodeView that resolves
- * SQLite-backed `idb://crop-...` figure crop URIs transparently,
- * drag-and-drop image/figure insertion at exact cursor coordinates,
- * and a living PageCitationDecorator that turns `[Page X]` / `(Page X)`
- * references into clickable jump-and-spotlight badges.
+ * SQLite-backed `idb://crop-...` figure crop URIs transparently with a
+ * bounded LRU cache, drag-and-drop image/figure insertion at exact cursor
+ * coordinates, and a living PageCitationDecorator that turns `[Page X]` /
+ * `(Page X)` references into clickable jump-and-spotlight badges.
  */
 
 import React, {
@@ -33,6 +33,7 @@ import { Markdown } from "@tiptap/markdown";
 import Image from "@tiptap/extension-image";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { common, createLowlight } from "lowlight";
+import { toast } from "sonner";
 import {
   Bold,
   Code,
@@ -50,52 +51,77 @@ import {
   Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
-import { useDocumentStore } from "@/stores/documentStore";
-import { useRagStore } from "@/stores/ragStore";
+import {
+  extractSentenceAroundOffset,
+  jumpAndSpotlightCitation,
+} from "@/utils/citationSpotlight";
 import { cn } from "@/lib/utils";
 
 const lowlight = createLowlight(common);
+const MAX_CROP_CACHE_ENTRIES = 30;
+const MAX_DROPPED_IMAGE_BYTES = 5 * 1024 * 1024;
 const resolvedCropCache = new Map<string, string>();
 const pageCitationPluginKey = new PluginKey("folietPageCitations");
 const PAGE_CITATION_REGEX =
   /(\[(?:[^\]\n]*?,\s*)?Page\s+(\d+)\])|(\(Page\s+(\d+)\))/gi;
+const MARKDOWN_CROP_IMAGE_RE =
+  /(!\[[^\]]*\]\()((?:idb|db):\/\/[^)\s]+)((?:\s+[^)]*)?\))/g;
 
-async function spotlightPageFromCitation(pageNumber: number): Promise<void> {
-  const activeDoc = useDocumentStore.getState().activeDoc;
-  if (!activeDoc) return;
+function getCachedCrop(key: string): string | null {
+  const cached = resolvedCropCache.get(key);
+  if (cached === undefined) return null;
+  resolvedCropCache.delete(key);
+  resolvedCropCache.set(key, cached);
+  return cached;
+}
 
-  try {
-    const chunks = await RagService.getDocumentChunks(activeDoc.id);
-    const pageChunks = chunks.filter((c) => c.pageNumber === pageNumber);
-    if (pageChunks.length > 0) {
-      const mergedRects = pageChunks
-        .flatMap((c) => c.rectSegments ?? [])
-        .slice(0, 48);
-      useRagStore.getState().setActiveRagHighlight({
-        chunkId: pageChunks[0].chunkId,
-        docId: activeDoc.id,
-        docTitle: activeDoc.title,
-        pageNumber,
-        text: pageChunks[0].text,
-        similarityScore: 1.0,
-        rectSegments: mergedRects.length > 0 ? mergedRects : undefined,
-      });
-      return;
-    }
-  } catch {
-    // Fall back to page-level highlight if the document is not indexed
+function setCachedCrop(key: string, value: string): void {
+  if (resolvedCropCache.has(key)) {
+    resolvedCropCache.delete(key);
   }
+  resolvedCropCache.set(key, value);
+  while (resolvedCropCache.size > MAX_CROP_CACHE_ENTRIES) {
+    const oldestKey = resolvedCropCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    resolvedCropCache.delete(oldestKey);
+  }
+}
 
-  useRagStore.getState().setActiveRagHighlight({
-    chunkId: `summary-citation-page-${pageNumber}`,
-    docId: activeDoc.id,
-    docTitle: activeDoc.title,
-    pageNumber,
-    text: `Summary citation on Page ${pageNumber}`,
-    similarityScore: 1.0,
-  });
+export function clearResolvedCropCache(uriOrId?: string): void {
+  if (!uriOrId) {
+    resolvedCropCache.clear();
+    return;
+  }
+  const bare = uriOrId.replace(/^(?:idb|db):\/\//, "");
+  for (const key of Array.from(resolvedCropCache.keys())) {
+    if (key === uriOrId || key.replace(/^(?:idb|db):\/\//, "") === bare) {
+      resolvedCropCache.delete(key);
+    }
+  }
+}
+
+function normalizeHeadingBasic(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeHeadingWithoutPrefix(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(
+      /^(?:chapter|ch\.?|section|sec\.?|part)\s+(?:\d+(?:\.\d+)*|[ivxlcdm]+)\s*[:.\-–—]?\s*/i,
+      "",
+    )
+    .replace(/^\d+(?:\.\d+)*[.)]?\s*[:.\-–—]?\s*/, "")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildCitationDecorations(doc: ProseMirrorNode): DecorationSet {
@@ -121,7 +147,7 @@ function buildCitationDecorations(doc: ProseMirrorNode): DecorationSet {
       decorations.push(
         Decoration.inline(from, to, {
           "data-citation-page": String(pageNum),
-          title: `Jump to Page ${pageNum} & spotlight chunks`,
+          title: `Jump to Page ${pageNum} & spotlight passage`,
           class:
             "inline-flex items-center rounded border border-[var(--accent-brand,#2563EB)]/35 bg-[var(--accent-brand,#2563EB)]/10 px-1.5 py-0 mx-0.5 font-mono text-[11px] font-medium text-[var(--accent-brand,#2563EB)] cursor-pointer transition-colors hover:bg-[var(--accent-brand,#2563EB)]/20",
         }),
@@ -153,19 +179,51 @@ function createPageCitationExtension(
               return pageCitationPluginKey.getState(state);
             },
             handleDOMEvents: {
-              click: (_view, event) => {
+              mousedown: (_view, event) => {
+                const target = event.target as HTMLElement | null;
+                const badge = target?.closest("[data-citation-page]");
+                if (!badge) return false;
+                event.preventDefault();
+                return true;
+              },
+              click: (view, event) => {
                 const target = event.target as HTMLElement | null;
                 const badge = target?.closest("[data-citation-page]");
                 if (!badge) return false;
 
+                event.preventDefault();
+                event.stopPropagation();
+
                 const pageNum = Number(
                   badge.getAttribute("data-citation-page"),
                 );
-                if (!Number.isFinite(pageNum) || pageNum < 1) return false;
+                if (!Number.isFinite(pageNum) || pageNum < 1) return true;
 
-                onJumpRef.current?.(pageNum);
-                void spotlightPageFromCitation(pageNum);
-                return false;
+                let contextText = "";
+                try {
+                  const pos = view.posAtDOM(badge, 0);
+                  const $pos = view.state.doc.resolve(pos);
+                  const blockText = $pos.parent.textContent || "";
+                  const badgeText = badge.textContent || "";
+                  const offsetInParent = Math.max(0, $pos.parentOffset);
+                  contextText = extractSentenceAroundOffset(
+                    blockText,
+                    offsetInParent,
+                    offsetInParent + badgeText.length,
+                  );
+                } catch {
+                  const blockEl = badge.closest(
+                    "p, li, blockquote, h1, h2, h3, td",
+                  );
+                  contextText = blockEl?.textContent || "";
+                }
+
+                void jumpAndSpotlightCitation({
+                  pageNumber: pageNum,
+                  contextText,
+                  onJumpToPage: onJumpRef.current,
+                });
+                return true;
               },
             },
           },
@@ -176,7 +234,7 @@ function createPageCitationExtension(
 }
 
 /**
- * Resolves an `idb://...` or `db://...` crop URI from SQLite (cached in memory),
+ * Resolves an `idb://...` or `db://...` crop URI from SQLite (cached in LRU memory),
  * or returns standard `data:` / `http(s):` URLs unchanged.
  */
 export async function resolveCropImageSrc(src: string): Promise<string | null> {
@@ -189,7 +247,7 @@ export async function resolveCropImageSrc(src: string): Promise<string | null> {
     return src;
   }
 
-  const cached = resolvedCropCache.get(src);
+  const cached = getCachedCrop(src);
   if (cached) return cached;
 
   if (
@@ -199,7 +257,7 @@ export async function resolveCropImageSrc(src: string): Promise<string | null> {
   ) {
     const dataUrl = await DocumentDatabase.getFigureCrop(src);
     if (dataUrl) {
-      resolvedCropCache.set(src, dataUrl);
+      setCachedCrop(src, dataUrl);
       return dataUrl;
     }
   }
@@ -214,20 +272,30 @@ export async function resolveCropImageSrc(src: string): Promise<string | null> {
 export async function resolveMarkdownCropImages(
   markdown: string,
 ): Promise<string> {
-  const matches = Array.from(
-    markdown.matchAll(/!\[([^\]]*)\]\((idb:\/\/[^)\s]+|db:\/\/[^)\s]+)\)/g),
-  );
-  if (matches.length === 0) return markdown;
-
-  let result = markdown;
-  for (const match of matches) {
-    const uri = match[2];
-    const resolved = await resolveCropImageSrc(uri);
-    if (resolved) {
-      result = result.split(`(${uri})`).join(`(${resolved})`);
-    }
+  const uris = new Set<string>();
+  for (const match of markdown.matchAll(MARKDOWN_CROP_IMAGE_RE)) {
+    uris.add(match[2]);
   }
-  return result;
+  if (uris.size === 0) return markdown;
+
+  const resolvedMap = new Map<string, string>();
+  await Promise.all(
+    Array.from(uris).map(async (uri) => {
+      const resolved = await resolveCropImageSrc(uri);
+      if (resolved) {
+        resolvedMap.set(uri, resolved);
+      }
+    }),
+  );
+  if (resolvedMap.size === 0) return markdown;
+
+  return markdown.replace(
+    MARKDOWN_CROP_IMAGE_RE,
+    (full, prefix: string, uri: string, suffix: string) => {
+      const resolved = resolvedMap.get(uri);
+      return resolved ? `${prefix}${resolved}${suffix}` : full;
+    },
+  );
 }
 
 const CropImageNodeView: React.FC<NodeViewProps> = ({
@@ -246,7 +314,7 @@ const CropImageNodeView: React.FC<NodeViewProps> = ({
     ) {
       return rawSrc;
     }
-    return resolvedCropCache.get(rawSrc) ?? null;
+    return getCachedCrop(rawSrc);
   });
   const [isMissing, setIsMissing] = useState(false);
 
@@ -263,7 +331,7 @@ const CropImageNodeView: React.FC<NodeViewProps> = ({
       return;
     }
 
-    const cached = resolvedCropCache.get(rawSrc);
+    const cached = getCachedCrop(rawSrc);
     if (cached) {
       setResolvedSrc(cached);
       return;
@@ -416,7 +484,7 @@ export const SummaryDocsEditor = forwardRef<
       CodeBlockLowlight.configure({
         lowlight,
         defaultLanguage: "plaintext",
-      } as any),
+      }),
       CropAwareImage.configure({
         inline: false,
         allowBase64: true,
@@ -429,8 +497,8 @@ export const SummaryDocsEditor = forwardRef<
     editable: !isStreaming,
     editorProps: {
       handleDrop: (view, event, _slice, moved) => {
-        if (moved || isStreamingRef.current) return false;
         setIsDragOver(false);
+        if (moved || isStreamingRef.current) return false;
 
         const coords = view.posAtCoords({
           left: event.clientX,
@@ -471,8 +539,13 @@ export const SummaryDocsEditor = forwardRef<
         const imageFile = files.find((f) => f.type.startsWith("image/"));
         if (imageFile) {
           event.preventDefault();
+          if (imageFile.size > MAX_DROPPED_IMAGE_BYTES) {
+            toast.error("Dropped image exceeds the 5 MB size limit.");
+            return true;
+          }
           const reader = new FileReader();
           reader.onload = () => {
+            if (view.isDestroyed) return;
             const dataUrl =
               typeof reader.result === "string" ? reader.result : null;
             if (!dataUrl) return;
@@ -486,6 +559,9 @@ export const SummaryDocsEditor = forwardRef<
               view.dispatch(tr);
               view.focus();
             }
+          };
+          reader.onerror = () => {
+            toast.error("Failed to read dropped image file.");
           };
           reader.readAsDataURL(imageFile);
           return true;
@@ -538,13 +614,74 @@ export const SummaryDocsEditor = forwardRef<
       getMarkdown: () => editor?.getMarkdown() ?? lastSyncedMarkdownRef.current,
       scrollToHeading: (title: string) => {
         if (!editor) return;
-        const normalized = title.toLowerCase().trim();
+        const targetExact = title.toLowerCase().trim();
+        if (!targetExact) return;
+
         const headings = Array.from(
           editor.view.dom.querySelectorAll("h1, h2, h3"),
         ) as HTMLElement[];
-        const target = headings.find(
-          (h) => (h.textContent || "").toLowerCase().trim() === normalized,
+        if (headings.length === 0) return;
+
+        const targetBasic = normalizeHeadingBasic(title);
+        const targetStripped = normalizeHeadingWithoutPrefix(title);
+        const targetTokens = new Set(
+          (targetStripped || targetBasic)
+            .split(" ")
+            .filter((w) => w.length >= 2),
         );
+
+        let target = headings.find(
+          (h) => (h.textContent || "").toLowerCase().trim() === targetExact,
+        );
+
+        if (!target && targetBasic) {
+          target = headings.find(
+            (h) => normalizeHeadingBasic(h.textContent || "") === targetBasic,
+          );
+        }
+
+        if (!target && targetStripped) {
+          target = headings.find(
+            (h) =>
+              normalizeHeadingWithoutPrefix(h.textContent || "") ===
+              targetStripped,
+          );
+        }
+
+        if (!target && (targetStripped.length >= 4 || targetTokens.size > 0)) {
+          let bestScore = 0;
+          for (const h of headings) {
+            const raw = h.textContent || "";
+            const stripped =
+              normalizeHeadingWithoutPrefix(raw) || normalizeHeadingBasic(raw);
+            if (!stripped) continue;
+
+            if (
+              targetStripped.length >= 4 &&
+              (stripped.includes(targetStripped) ||
+                targetStripped.includes(stripped))
+            ) {
+              target = h;
+              break;
+            }
+
+            if (targetTokens.size > 0) {
+              const hTokens = new Set(
+                stripped.split(" ").filter((w) => w.length >= 2),
+              );
+              let hits = 0;
+              for (const tok of targetTokens) {
+                if (hTokens.has(tok)) hits += 1;
+              }
+              const overlap = hits / Math.max(targetTokens.size, hTokens.size);
+              if (overlap >= 0.5 && overlap > bestScore) {
+                bestScore = overlap;
+                target = h;
+              }
+            }
+          }
+        }
+
         target?.scrollIntoView({ behavior: "smooth", block: "start" });
       },
     }),
@@ -618,15 +755,15 @@ export const SummaryDocsEditor = forwardRef<
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
           <ToolbarButton
             label="Undo"
-            disabled={controlsDisabled || !(editor?.can() as any)?.undo?.()}
-            onClick={() => (editor?.chain().focus() as any)?.undo?.().run()}
+            disabled={controlsDisabled || !editor?.can().undo()}
+            onClick={() => editor?.chain().focus().undo().run()}
           >
             <Undo2 size={14} strokeWidth={1.5} />
           </ToolbarButton>
           <ToolbarButton
             label="Redo"
-            disabled={controlsDisabled || !(editor?.can() as any)?.redo?.()}
-            onClick={() => (editor?.chain().focus() as any)?.redo?.().run()}
+            disabled={controlsDisabled || !editor?.can().redo()}
+            onClick={() => editor?.chain().focus().redo().run()}
           >
             <Redo2 size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -638,7 +775,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 1 })}
             disabled={controlsDisabled}
             onClick={() =>
-              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 1 }).run()
+              editor?.chain().focus().toggleHeading({ level: 1 }).run()
             }
           >
             <Heading1 size={14} strokeWidth={1.5} />
@@ -648,7 +785,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 2 })}
             disabled={controlsDisabled}
             onClick={() =>
-              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 2 }).run()
+              editor?.chain().focus().toggleHeading({ level: 2 }).run()
             }
           >
             <Heading2 size={14} strokeWidth={1.5} />
@@ -658,7 +795,7 @@ export const SummaryDocsEditor = forwardRef<
             isActive={editor?.isActive("heading", { level: 3 })}
             disabled={controlsDisabled}
             onClick={() =>
-              (editor?.chain().focus() as any)?.toggleHeading?.({ level: 3 }).run()
+              editor?.chain().focus().toggleHeading({ level: 3 }).run()
             }
           >
             <Heading3 size={14} strokeWidth={1.5} />
@@ -670,7 +807,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Bold"
             isActive={editor?.isActive("bold")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleBold?.().run()}
+            onClick={() => editor?.chain().focus().toggleBold().run()}
           >
             <Bold size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -678,7 +815,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Italic"
             isActive={editor?.isActive("italic")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleItalic?.().run()}
+            onClick={() => editor?.chain().focus().toggleItalic().run()}
           >
             <Italic size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -689,7 +826,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Bullet List"
             isActive={editor?.isActive("bulletList")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleBulletList?.().run()}
+            onClick={() => editor?.chain().focus().toggleBulletList().run()}
           >
             <List size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -697,7 +834,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Ordered List"
             isActive={editor?.isActive("orderedList")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleOrderedList?.().run()}
+            onClick={() => editor?.chain().focus().toggleOrderedList().run()}
           >
             <ListOrdered size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -705,7 +842,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Blockquote"
             isActive={editor?.isActive("blockquote")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleBlockquote?.().run()}
+            onClick={() => editor?.chain().focus().toggleBlockquote().run()}
           >
             <Quote size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -716,7 +853,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Inline Code"
             isActive={editor?.isActive("code")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleCode?.().run()}
+            onClick={() => editor?.chain().focus().toggleCode().run()}
           >
             <Code size={14} strokeWidth={1.5} />
           </ToolbarButton>
@@ -724,7 +861,7 @@ export const SummaryDocsEditor = forwardRef<
             label="Code Block"
             isActive={editor?.isActive("codeBlock")}
             disabled={controlsDisabled}
-            onClick={() => (editor?.chain().focus() as any)?.toggleCodeBlock?.().run()}
+            onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
           >
             <FileCode size={14} strokeWidth={1.5} />
           </ToolbarButton>

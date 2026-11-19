@@ -12,10 +12,15 @@ import {
     streamText,
     type ModelMessage,
 } from "ai";
-import type { LlmProvider } from "@/types/chat";
+import { LLM_PRESETS } from "@/constants/models";
+import type { LlmModelPreset, LlmProvider } from "@/types/chat";
 import { extractErrorMessage, isAbortError } from "@/utils/error";
 import { splitDataUrl } from "@/utils/llmFormatting";
-import type { StreamChatOptions, VisionImageInput } from "./types";
+import type {
+    StreamChatOptions,
+    ToolVisionPayload,
+    VisionImageInput,
+} from "./types";
 
 export const PROVIDER_NAMES: Record<LlmProvider, string> = {
     openrouter: "OpenRouter",
@@ -25,53 +30,59 @@ export const PROVIDER_NAMES: Record<LlmProvider, string> = {
     ollama: "Ollama",
 };
 
+export function findModelPreset(
+    provider: LlmProvider,
+    model: string,
+): LlmModelPreset | undefined {
+    const normalized =
+        provider === "google-ai-studio" ? model.replace(/^models\//, "") : model;
+    return LLM_PRESETS[provider]?.find((preset) => preset.id === normalized);
+}
+
 export function isVisionCapableModel(
     provider: LlmProvider,
     model: string,
 ): boolean {
+    const preset = findModelPreset(provider, model);
+    if (typeof preset?.supportsVision === "boolean") {
+        return preset.supportsVision;
+    }
+
+    // Fallback heuristics for custom user-entered model IDs
     const m = model.toLowerCase();
     if (provider === "anthropic" || provider === "google-ai-studio") return true;
     if (provider === "openai") {
-        return (
-            m.includes("gpt-4o") ||
-            m.includes("gpt-4.1") ||
-            m.includes("gpt-5") ||
-            m.includes("gpt-6") ||
-            m.includes("vision")
-        );
+        return /gpt-(?:4o|4\.1|5|6)|vision/.test(m);
     }
     if (provider === "openrouter") {
-        return (
-            m.includes("claude") ||
-            m.includes("gemini") ||
-            m.includes("gpt-4o") ||
-            m.includes("gpt-4.1") ||
-            m.includes("gpt-5") ||
-            m.includes("gpt-6") ||
-            m.includes("vl") ||
-            m.includes("vision") ||
-            m.includes("gemma")
-        );
+        return /claude|gemini|gpt-(?:4o|4\.1|5|6)|vl|vision|gemma/.test(m);
     }
     if (provider === "ollama") {
-        return (
-            m.includes("gemma4") ||
-            m.includes("gemma3") ||
-            m.includes("llava") ||
-            m.includes("vision") ||
-            m.includes("qwen2.5vl") ||
-            m.includes("qwen3.5") ||
-            m.includes("minicpm-v")
-        );
+        return /gemma[34]|llava|vision|qwen2\.5vl|qwen3\.5|minicpm-v/.test(m);
     }
     return false;
+}
+
+export function resolveMaxOutputTokens(
+    provider: LlmProvider,
+    model: string,
+): number | undefined {
+    const preset = findModelPreset(provider, model);
+    if (typeof preset?.maxOutputTokens === "number") {
+        return preset.maxOutputTokens;
+    }
+    return provider === "anthropic" ? 4096 : undefined;
 }
 
 const openRouterWebSearchFetch: typeof fetch = async (input, init) => {
     if (typeof init?.body === "string") {
         try {
             const parsed = JSON.parse(init.body);
-            parsed.plugins = [{ id: "web" }];
+            const plugins = Array.isArray(parsed.plugins) ? parsed.plugins : [];
+            if (!plugins.some((p: { id?: string } | null) => p?.id === "web")) {
+                plugins.push({ id: "web" });
+            }
+            parsed.plugins = plugins;
             return fetch(input, { ...init, body: JSON.stringify(parsed) });
         } catch {
             // Fall through with original body
@@ -184,6 +195,62 @@ function buildSdkMessages(
     });
 }
 
+function appendVisionFollowUpMessages(
+    baseMessages: ModelMessage[],
+    assistantLeadText: string,
+    visionBatch: ToolVisionPayload[],
+    attachImages: boolean,
+): ModelMessage[] {
+    const textContext = visionBatch
+        .map((item) => item.context)
+        .filter(Boolean)
+        .join("\n\n");
+
+    const userContent: Array<
+        | { type: "text"; text: string }
+        | { type: "image"; image: string; mediaType?: string }
+    > = [
+            {
+                type: "text",
+                text: attachImages
+                    ? `Figure tool results and attached visual crop(s) for inspection:\n\n${textContext}`
+                    : `Figure tool results:\n\n${textContext}`,
+            },
+        ];
+
+    if (attachImages) {
+        for (const item of visionBatch) {
+            const { image } = item;
+            if (image.caption) {
+                userContent.push({
+                    type: "text",
+                    text: `[Figure Reference: ${image.caption}]`,
+                });
+            }
+            const split = splitDataUrl(image.dataUrl);
+            userContent.push(
+                split
+                    ? { type: "image", image: split.base64, mediaType: split.mimeType }
+                    : { type: "image", image: image.dataUrl },
+            );
+        }
+    }
+
+    return [
+        ...baseMessages,
+        {
+            role: "assistant",
+            content:
+                assistantLeadText.trim() ||
+                "I have retrieved the figure context for inspection.",
+        },
+        {
+            role: "user",
+            content: userContent,
+        },
+    ];
+}
+
 function isToolUnsupportedError(err: unknown): boolean {
     if (APICallError.isInstance(err) && err.statusCode === 400) {
         return /tool|function|support/i.test(
@@ -211,35 +278,49 @@ export async function dispatchProviderStream(params: {
     options: StreamChatOptions;
 }): Promise<string> {
     const { provider, model, apiKey, ollamaEndpoint, options } = params;
+    const visionSupported = isVisionCapableModel(provider, model);
     const vision =
-        options.visionImages?.length && isVisionCapableModel(provider, model)
-            ? options.visionImages
-            : null;
-    const messages = buildSdkMessages(options, vision);
+        options.visionImages?.length && visionSupported ? options.visionImages : null;
+    const initialMessages = buildSdkMessages(options, vision);
     const languageModel = createLanguageModel({
         provider,
         model,
         apiKey,
         ollamaEndpoint,
-        webSearchEnabled: options.webSearchEnabled,
+        webSearchEnabled:
+            provider === "openrouter" && Boolean(options.webSearchEnabled),
     });
+    const maxOutputTokens = resolveMaxOutputTokens(provider, model);
     const hasTools = Boolean(options.tools && Object.keys(options.tools).length > 0);
+    const maxSteps = options.maxSteps ?? 3;
+    const MAX_TOOL_VISION_TURNS = 2;
 
-    const runStream = async (includeTools: boolean): Promise<string> => {
+    const runStream = async (
+        includeTools: boolean,
+        activeMessages: ModelMessage[],
+        visionTurn = 0,
+    ): Promise<string> => {
         let progressed = false;
         let fullText = "";
+
+        const stopWhen =
+            includeTools && hasTools
+                ? options.hasPendingToolVision && visionTurn < MAX_TOOL_VISION_TURNS
+                    ? [
+                        stepCountIs(Math.max(1, maxSteps - visionTurn)),
+                        () => Boolean(options.hasPendingToolVision?.()),
+                    ]
+                    : stepCountIs(Math.max(1, maxSteps - visionTurn))
+                : undefined;
 
         try {
             const result = streamText({
                 model: languageModel,
                 system: options.systemPrompt?.trim() || undefined,
-                messages,
+                messages: activeMessages,
                 tools: includeTools ? options.tools : undefined,
-                stopWhen:
-                    includeTools && hasTools
-                        ? stepCountIs(options.maxSteps ?? 3)
-                        : undefined,
-                maxOutputTokens: provider === "anthropic" ? 4096 : undefined,
+                stopWhen,
+                maxOutputTokens,
                 abortSignal: options.signal,
             });
 
@@ -261,15 +342,46 @@ export async function dispatchProviderStream(params: {
                         );
                 }
             }
+
+            const capturedVision = options.consumePendingToolVision?.() ?? [];
+            if (
+                capturedVision.length > 0 &&
+                visionTurn < MAX_TOOL_VISION_TURNS &&
+                !options.signal?.aborted
+            ) {
+                if (fullText.length > 0 && !fullText.endsWith("\n")) {
+                    options.onChunk("\n\n");
+                    fullText += "\n\n";
+                }
+                const followUpMessages = appendVisionFollowUpMessages(
+                    activeMessages,
+                    fullText,
+                    capturedVision,
+                    visionSupported,
+                );
+                const followUpText = await runStream(
+                    includeTools,
+                    followUpMessages,
+                    visionTurn + 1,
+                );
+                fullText += followUpText;
+            }
+
             return fullText;
         } catch (err) {
             if (isAbortError(err, options.signal)) throw err;
-            if (includeTools && hasTools && !progressed && isToolUnsupportedError(err)) {
-                return runStream(false);
+            if (
+                visionTurn === 0 &&
+                includeTools &&
+                hasTools &&
+                !progressed &&
+                isToolUnsupportedError(err)
+            ) {
+                return runStream(false, activeMessages, 0);
             }
             throw formatProviderError(err, provider);
         }
     };
 
-    return runStream(hasTools);
+    return runStream(hasTools, initialMessages, 0);
 }

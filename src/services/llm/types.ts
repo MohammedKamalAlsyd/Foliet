@@ -16,6 +16,11 @@ export interface VisionImageInput {
     caption?: string;
 }
 
+export interface ToolVisionPayload {
+    image: VisionImageInput;
+    context: string;
+}
+
 export interface StreamChatOptions {
     messages: ChatMessage[];
     systemPrompt?: string;
@@ -24,6 +29,8 @@ export interface StreamChatOptions {
     maxSteps?: number;
     webSearchEnabled?: boolean;
     visionImages?: VisionImageInput[];
+    hasPendingToolVision?: () => boolean;
+    consumePendingToolVision?: () => ToolVisionPayload[];
     signal?: AbortSignal;
     provider?: LlmProvider;
     model?: string;
@@ -85,6 +92,9 @@ export interface ChapterSummaryInput {
     notes: SummaryNoteInput[];
     crops: SummaryCropInput[];
     chatTakeaways: SummaryChatTakeawayInput[];
+    includeNotes?: boolean;
+    includeChats?: boolean;
+    webSearchEnabled?: boolean;
 }
 
 export interface ModifySummaryInput {
@@ -102,4 +112,7 @@ export interface ModifySummaryInput {
     notes: SummaryNoteInput[];
     crops: SummaryCropInput[];
     chatTakeaways: SummaryChatTakeawayInput[];
+    includeNotes?: boolean;
+    includeChats?: boolean;
+    webSearchEnabled?: boolean;
 }

@@ -208,12 +208,11 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
         openDocument({
           id: targetCatalog.docId,
           title: targetCatalog.docTitle,
-          pages: 10,
+          pages: 0,
           filePath: targetCatalog.filePath,
           isIndexed: true,
           lastPage: result.pageNumber,
         });
-        onJumpToPage(result.pageNumber);
       }
     }
   };

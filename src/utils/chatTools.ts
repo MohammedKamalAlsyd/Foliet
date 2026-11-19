@@ -3,12 +3,18 @@ import {
     insertFigureIntoSummary,
 } from "@/services/figureCropper";
 import type { LlmToolCall } from "@/services/llm";
+import type { ToolVisionPayload } from "@/services/llm/types";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAnnotationStore } from "@/stores/annotationStore";
 import { useRagStore } from "@/stores/ragStore";
-import type { TextMarkupAnnotation } from "@/types/annotations";
+import {
+    isCropAnnotation,
+    type CropAnnotation,
+    type TextMarkupAnnotation,
+} from "@/types/annotations";
 import type { ExecutedToolCall } from "@/types/chat";
-import { formatCropMarkdown } from "@/utils/llmFormatting";
+import type { DocumentChunk } from "@/types/embedding";
+import { formatCropMarkdown, resolveCropUri } from "@/utils/llmFormatting";
 import {
     getPageRagChunks,
     readPageContextText,
@@ -19,6 +25,209 @@ export interface CopilotToolContext {
     docId?: string;
     docTitle?: string;
     jumpToPage?: (page: number) => void;
+    supportsVision?: boolean;
+    onVisionImageCaptured?: (payload: ToolVisionPayload) => void;
+}
+
+const FIGURE_ID_RE =
+    /\b(fig(?:ure)?|table|tbl|chart|diagram|algorithm|alg|listing|plate|scheme|exhibit)\s*\.?\s*(\d+(?:\.\d+)?[a-z]?|[ivxlcdm]+)\b/gi;
+
+const FIGURE_STOPWORDS = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "these",
+    "those",
+    "into",
+    "over",
+    "under",
+    "between",
+    "fig",
+    "figure",
+    "table",
+    "tbl",
+    "chart",
+    "diagram",
+    "algorithm",
+    "alg",
+    "listing",
+    "plate",
+    "scheme",
+    "exhibit",
+    "page",
+    "shown",
+    "shows",
+    "show",
+]);
+
+function extractFigureIdentifiers(text: string): string[] {
+    const ids = new Set<string>();
+    FIGURE_ID_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = FIGURE_ID_RE.exec(text)) !== null) {
+        const rawKind = match[1].toLowerCase();
+        const kind =
+            rawKind === "fig" || rawKind === "figure"
+                ? "fig"
+                : rawKind === "tbl" || rawKind === "table"
+                    ? "table"
+                    : rawKind === "alg" || rawKind === "algorithm"
+                        ? "alg"
+                        : rawKind;
+        ids.add(`${kind}:${match[2].toLowerCase()}`);
+    }
+    return Array.from(ids);
+}
+
+function tokenizeCaption(text: string): Set<string> {
+    const tokens = new Set<string>();
+    for (const word of text.toLowerCase().split(/[^a-z0-9]+/)) {
+        if (word.length >= 3 && !FIGURE_STOPWORDS.has(word)) {
+            tokens.add(word);
+        }
+    }
+    return tokens;
+}
+
+function scoreFigureCandidate(
+    candidateText: string,
+    caption: string,
+): { score: number; hasIdMatch: boolean; overlapCount: number; overlapRatio: number } {
+    if (!candidateText.trim()) {
+        return { score: 0, hasIdMatch: false, overlapCount: 0, overlapRatio: 0 };
+    }
+
+    const queryIds = extractFigureIdentifiers(caption);
+    const candidateIds = extractFigureIdentifiers(candidateText);
+    const hasIdMatch =
+        queryIds.length > 0 && queryIds.some((id) => candidateIds.includes(id));
+
+    const queryTokens = tokenizeCaption(caption);
+    const candidateTokens = tokenizeCaption(candidateText);
+    let overlapCount = 0;
+    for (const tok of queryTokens) {
+        if (candidateTokens.has(tok)) overlapCount += 1;
+    }
+
+    const overlapRatio = queryTokens.size > 0 ? overlapCount / queryTokens.size : 0;
+    let score = (hasIdMatch ? 10 : 0) + overlapRatio * 5 + Math.min(overlapCount, 4) * 0.5;
+
+    if (queryIds.length > 0 && !hasIdMatch && candidateIds.length > 0) {
+        const queryKinds = new Set(queryIds.map((id) => id.split(":")[0]));
+        const hasConflictingSameKind = candidateIds.some((id) =>
+            queryKinds.has(id.split(":")[0]),
+        );
+        if (hasConflictingSameKind) score -= 4;
+    }
+
+    return { score, hasIdMatch, overlapCount, overlapRatio };
+}
+
+function findMatchingFigureChunk(
+    pageChunks: DocumentChunk[],
+    caption: string,
+): DocumentChunk | null {
+    if (pageChunks.length === 0) return null;
+
+    if (!caption) {
+        return (
+            pageChunks.find((c) => extractFigureIdentifiers(c.text).length > 0) ??
+            pageChunks[0]
+        );
+    }
+
+    const queryIds = extractFigureIdentifiers(caption);
+    const queryTokens = tokenizeCaption(caption);
+
+    let bestChunk: DocumentChunk | null = null;
+    let bestScore = 0;
+
+    for (const chunk of pageChunks) {
+        const metrics = scoreFigureCandidate(chunk.text, caption);
+        const meetsThreshold =
+            metrics.hasIdMatch ||
+            (queryIds.length === 0 &&
+                (queryTokens.size >= 3
+                    ? metrics.overlapCount >= 2 && metrics.overlapRatio >= 0.4
+                    : metrics.overlapCount >= 1)) ||
+            (queryIds.length > 0 &&
+                queryTokens.size >= 2 &&
+                metrics.overlapCount >= 2 &&
+                metrics.overlapRatio >= 0.6);
+
+        if (meetsThreshold && metrics.score > bestScore) {
+            bestScore = metrics.score;
+            bestChunk = chunk;
+        }
+    }
+
+    return bestChunk;
+}
+
+async function resolveCropForFigureExplanation(params: {
+    docId?: string;
+    pageNumber: number;
+    caption: string;
+    jumpToPage?: (page: number) => void;
+}): Promise<{ crop: CropAnnotation; dataUrl: string } | null> {
+    if (!params.docId) return null;
+
+    let selectedCrop: CropAnnotation | null = null;
+    try {
+        const annotations = await DocumentDatabase.getAnnotations(params.docId);
+        const pageCrops = annotations.filter(
+            (a): a is CropAnnotation =>
+                isCropAnnotation(a) && a.pageNumber === params.pageNumber,
+        );
+        if (pageCrops.length > 0) {
+            if (!params.caption) {
+                selectedCrop = pageCrops[0];
+            } else {
+                let bestScore = 0;
+                for (const crop of pageCrops) {
+                    if (!crop.caption) continue;
+                    const metrics = scoreFigureCandidate(crop.caption, params.caption);
+                    if (
+                        (metrics.hasIdMatch || metrics.overlapCount >= 1) &&
+                        metrics.score > bestScore
+                    ) {
+                        bestScore = metrics.score;
+                        selectedCrop = crop;
+                    }
+                }
+            }
+        }
+    } catch {
+        // Fall through to auto-capture
+    }
+
+    if (!selectedCrop) {
+        const captured = await captureFigureCropFromPage(
+            params.pageNumber,
+            params.caption || undefined,
+            { docId: params.docId, jumpToPage: params.jumpToPage },
+        );
+        if (captured?.crop) {
+            selectedCrop = captured.crop;
+        }
+    }
+
+    if (!selectedCrop) return null;
+
+    let dataUrl: string | null = null;
+    if (selectedCrop.imageUrl.startsWith("data:")) {
+        dataUrl = selectedCrop.imageUrl;
+    } else {
+        const uri = resolveCropUri(selectedCrop.id, selectedCrop.imageUrl);
+        dataUrl = await DocumentDatabase.getFigureCrop(uri).catch(() => null);
+    }
+
+    if (!dataUrl || !dataUrl.startsWith("data:")) return null;
+    return { crop: selectedCrop, dataUrl };
 }
 
 export async function executeCopilotToolCall(
@@ -132,37 +341,97 @@ export async function executeCopilotToolCall(
         context.jumpToPage?.(pageNumber);
         const caption = typeof args.caption === "string" ? args.caption.trim() : "";
 
-        let pageContext = "";
         const pageChunks = await getPageRagChunks(context.docId, pageNumber);
-        if (pageChunks.length > 0 && context.docId) {
-            const matched =
-                (caption &&
-                    pageChunks.find((c) =>
-                        c.text.toLowerCase().includes(caption.toLowerCase()),
-                    )) ||
-                pageChunks[0];
+        const matchedChunk = findMatchingFigureChunk(pageChunks, caption);
+
+        let pageContext = "";
+        if (matchedChunk && context.docId) {
             useRagStore.getState().setActiveRagHighlight({
-                chunkId: matched.chunkId,
+                chunkId: matchedChunk.chunkId,
                 docId: context.docId,
                 docTitle: context.docTitle || "Document",
                 pageNumber,
-                text: matched.text,
+                text: matchedChunk.text,
                 similarityScore: 1.0,
-                rectSegments: matched.rectSegments,
+                rectSegments: matchedChunk.rectSegments,
             });
-            pageContext = pageChunks
-                .slice(0, 2)
+            const adjacentChunks = pageChunks
+                .filter((c) => c.chunkId !== matchedChunk.chunkId)
+                .slice(0, 1);
+            pageContext = [matchedChunk, ...adjacentChunks]
                 .map((c) => c.text)
                 .join("\n\n")
                 .slice(0, 1800);
-        }
-
-        if (!pageContext) {
-            pageContext = await readPageContextText(
+        } else {
+            const rawPageText = await readPageContextText(
                 context.docId,
                 pageNumber,
                 context.jumpToPage,
             );
+            if (!caption) {
+                pageContext = rawPageText;
+            } else if (rawPageText) {
+                const metrics = scoreFigureCandidate(rawPageText, caption);
+                if (metrics.hasIdMatch || metrics.overlapCount >= 1) {
+                    pageContext = rawPageText;
+                }
+            }
+        }
+
+        let visionAttached = false;
+        let attachedCaption = caption;
+        let cropResult: { crop: CropAnnotation; dataUrl: string } | null = null;
+        if (context.supportsVision) {
+            cropResult = await resolveCropForFigureExplanation({
+                docId: context.docId,
+                pageNumber,
+                caption,
+                jumpToPage: context.jumpToPage,
+            });
+            if (cropResult) {
+                visionAttached = true;
+                attachedCaption =
+                    cropResult.crop.caption || caption || `Figure on Page ${pageNumber}`;
+            }
+        }
+
+        if (caption && !matchedChunk && !pageContext && !visionAttached) {
+            return {
+                id: call.id,
+                name: call.name,
+                arguments: { pageNumber, caption },
+                status: "error",
+                badgeLabel: `⚠️ Figure not found on Page ${pageNumber}`,
+                result: `Navigated to Page ${pageNumber}, but no chunk, caption, or figure matching "${caption}" was found on that page.`,
+            };
+        }
+
+        const resultParts: string[] = [
+            `Navigated to Page ${pageNumber}${caption ? ` (${caption})` : ""}.`,
+        ];
+        if (visionAttached) {
+            resultParts.push(
+                `Cropped figure image ("${attachedCaption}") is attached for visual inspection.`,
+            );
+        }
+        if (caption && !matchedChunk) {
+            resultParts.push(
+                `Note: No indexed text chunk specifically matched "${caption}" on Page ${pageNumber}.`,
+            );
+        }
+        if (pageContext) {
+            resultParts.push(`Page context:\n${pageContext}`);
+        }
+
+        const resultText = resultParts.join(" ");
+        if (cropResult && visionAttached) {
+            context.onVisionImageCaptured?.({
+                image: {
+                    dataUrl: cropResult.dataUrl,
+                    caption: attachedCaption,
+                },
+                context: resultText,
+            });
         }
 
         return {
@@ -170,10 +439,10 @@ export async function executeCopilotToolCall(
             name: call.name,
             arguments: { pageNumber, caption },
             status: "success",
-            badgeLabel: `🖼️ Focused Figure on Page ${pageNumber}`,
-            result: pageContext
-                ? `Navigated to Page ${pageNumber}${caption ? ` (${caption})` : ""}. Page context:\n${pageContext}`
-                : `Navigated to Page ${pageNumber}${caption ? ` (${caption})` : ""}.`,
+            badgeLabel: visionAttached
+                ? `🖼️ Inspected Figure on Page ${pageNumber}`
+                : `🖼️ Focused Figure on Page ${pageNumber}`,
+            result: resultText,
         };
     }
 

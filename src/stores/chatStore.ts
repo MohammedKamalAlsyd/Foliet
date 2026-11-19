@@ -5,6 +5,8 @@
 import { produce } from "immer";
 import { create } from "zustand";
 import { buildCopilotTools, LlmService } from "@/services/llm";
+import { isVisionCapableModel } from "@/services/llm/providers";
+import type { ToolVisionPayload } from "@/services/llm/types";
 import { RagService } from "@/services/rag";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
@@ -87,6 +89,7 @@ async function resolveChatSystemPrompt(params: {
                         docTitle: r.docTitle,
                         pageNumber: r.pageNumber,
                         snippet: r.text.slice(0, 200),
+                        rectSegments: r.rectSegments,
                     })),
                 };
             }
@@ -112,6 +115,7 @@ async function resolveChatSystemPrompt(params: {
                             docTitle: params.activeDocTitle,
                             pageNumber: c.pageNumber,
                             snippet: c.text.slice(0, 200),
+                            rectSegments: c.rectSegments,
                         })),
                     };
                 }
@@ -320,16 +324,31 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
         try {
             const aiConfig = useAiConfigStore.getState();
+            const llmConfig = aiConfig.getActiveLlmConfig();
+            const pendingVisionQueue: ToolVisionPayload[] = [];
             const historyBeforeAssistant =
                 convAfterUser?.messages ?? [...conv.messages, userMsg];
 
             await LlmService.streamChat({
                 messages: historyBeforeAssistant,
                 systemPrompt: systemPrompt || undefined,
-                ...aiConfig.getActiveLlmConfig(),
+                ...llmConfig,
                 webSearchEnabled: aiConfig.webSearchEnabled,
+                hasPendingToolVision: () => pendingVisionQueue.length > 0,
+                consumePendingToolVision: () => pendingVisionQueue.splice(0),
                 tools: buildCopilotTools(
-                    { docId: activeDocId, docTitle: activeDocTitle, jumpToPage },
+                    {
+                        docId: activeDocId,
+                        docTitle: activeDocTitle,
+                        jumpToPage,
+                        supportsVision: isVisionCapableModel(
+                            llmConfig.provider,
+                            llmConfig.model,
+                        ),
+                        onVisionImageCaptured: (payload) => {
+                            pendingVisionQueue.push(payload);
+                        },
+                    },
                     (executed) => {
                         allExecutedTools.push(executed);
                         patchAssistant({ toolCalls: [...allExecutedTools] });

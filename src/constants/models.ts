@@ -138,6 +138,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "DeepSeek V4.1 Flash",
             provider: "openrouter",
             contextWindow: 1048576,
+            supportsVision: false,
             description:
                 "Excellent cost-to-performance ratio for book summarization, extraction, and long-context analysis.",
             isDefault: true,
@@ -147,6 +148,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Gemini 3.8 Flash",
             provider: "openrouter",
             contextWindow: 1048576,
+            supportsVision: true,
             description:
                 "Fast multimodal model for large PDFs, book summarization, and document synthesis.",
         },
@@ -155,6 +157,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Claude Haiku 5.5",
             provider: "openrouter",
             contextWindow: 1000000,
+            supportsVision: true,
             description:
                 "Fast and economical model for classification, extraction, and summarization.",
         },
@@ -163,6 +166,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Claude Sonnet 5.5",
             provider: "openrouter",
             contextWindow: 1000000,
+            supportsVision: true,
             description:
                 "High-quality reasoning and synthesis for complex academic research.",
         },
@@ -174,6 +178,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Gemini 3.8 Flash",
             provider: "google-ai-studio",
             contextWindow: 1048576,
+            supportsVision: true,
             description:
                 "Fast, cost-effective model for book summarization, PDF analysis, and long-context research.",
             isDefault: true,
@@ -186,6 +191,8 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Claude Haiku 5.5",
             provider: "anthropic",
             contextWindow: 1000000,
+            supportsVision: true,
+            maxOutputTokens: 4096,
             description:
                 "Fastest economical option for document processing, extraction, and summarization.",
             isDefault: true,
@@ -195,6 +202,8 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Claude Sonnet 5.5",
             provider: "anthropic",
             contextWindow: 1000000,
+            supportsVision: true,
+            maxOutputTokens: 8192,
             description:
                 "Strong analytical reasoning, academic writing, and multi-document synthesis.",
         },
@@ -203,6 +212,8 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Claude Opus 5.5",
             provider: "anthropic",
             contextWindow: 1000000,
+            supportsVision: true,
+            maxOutputTokens: 8192,
             description:
                 "Premium model for demanding research, complex reasoning, and deep analysis.",
         },
@@ -214,6 +225,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "GPT-6 Luna",
             provider: "openai",
             contextWindow: 1048576,
+            supportsVision: true,
             description:
                 "Fast and economical model for summarization, extraction, and everyday research tasks.",
             isDefault: true,
@@ -223,6 +235,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "GPT-6.1 Sol",
             provider: "openai",
             contextWindow: 1048576,
+            supportsVision: true,
             description:
                 "Advanced reasoning for academic research, complex synthesis, and analytical tasks.",
         },
@@ -231,6 +244,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "GPT-6 Astra",
             provider: "openai",
             contextWindow: 1048576,
+            supportsVision: true,
             description:
                 "Flagship reasoning model for the most demanding research and problem-solving tasks.",
         },
@@ -242,6 +256,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Gemma 4 (12B)",
             provider: "ollama",
             contextWindow: 262144,
+            supportsVision: true,
             description:
                 "Multimodal local model for document understanding, summarization, and general tasks.",
             isDefault: true,
@@ -251,6 +266,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Gemma 4 (31B)",
             provider: "ollama",
             contextWindow: 262144,
+            supportsVision: true,
             description:
                 "More capable local model for advanced reasoning and document synthesis.",
         },
@@ -259,6 +275,7 @@ export const LLM_PRESETS: Record<LlmProvider, LlmModelPreset[]> = {
             label: "Qwen 3.5 (9B)",
             provider: "ollama",
             contextWindow: 262144,
+            supportsVision: true,
             description:
                 "Efficient open-weight multimodal model for local reasoning and document processing.",
         },
