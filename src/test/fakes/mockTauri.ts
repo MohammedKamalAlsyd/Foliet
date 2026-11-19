@@ -42,6 +42,21 @@ export const mockRevealItemInDir = vi.fn<(path: string) => Promise<void>>(
   async () => {},
 );
 
+export const mockUpdaterCheck = vi.fn<(...args: unknown[]) => Promise<any>>(
+  async () => null,
+);
+export const mockProcessRelaunch = vi.fn<() => Promise<void>>(async () => {});
+
+export interface MockSecretsBackendState {
+  apiKeys: Record<string, string>;
+  embeddingApiKey: string;
+}
+
+export let mockSecretsBackend: MockSecretsBackendState = {
+  apiKeys: {},
+  embeddingApiKey: "",
+};
+
 const closeRequestedListeners = new Set<CloseHandler>();
 const maximizeListeners = new Set<(isMax: boolean) => void>();
 
@@ -291,6 +306,34 @@ export const mockTauriInvoke = vi.fn(
           fileSize: 2048,
           extractedAnnotations: [],
         };
+      case "load_api_secrets":
+        return {
+          apiKeys: { ...mockSecretsBackend.apiKeys },
+          embeddingApiKey: mockSecretsBackend.embeddingApiKey,
+        };
+      case "save_api_secret": {
+        const slot = String(args.slot ?? "").trim();
+        const value = String(args.value ?? "");
+        if (slot === "embedding" || slot === "embeddingApiKey") {
+          mockSecretsBackend.embeddingApiKey = value.trim() ? value : "";
+        } else if (slot) {
+          if (value.trim()) {
+            mockSecretsBackend.apiKeys[slot] = value;
+          } else {
+            delete mockSecretsBackend.apiKeys[slot];
+          }
+        }
+        return undefined;
+      }
+      case "delete_api_secret": {
+        const slot = String(args.slot ?? "").trim();
+        if (slot === "embedding" || slot === "embeddingApiKey") {
+          mockSecretsBackend.embeddingApiKey = "";
+        } else if (slot) {
+          delete mockSecretsBackend.apiKeys[slot];
+        }
+        return undefined;
+      }
       default:
         return undefined;
     }
@@ -342,6 +385,7 @@ export function resetMockTauri(): void {
   tauriEventListeners.clear();
   mockTauriStoreMap.clear();
   mockRagBackend = createDefaultRagBackend();
+  mockSecretsBackend = { apiKeys: {}, embeddingApiKey: "" };
 
   mockDialogSave.mockReset().mockResolvedValue("/mock/exports/output.md");
   mockDialogOpen.mockReset().mockResolvedValue(null);
@@ -350,6 +394,8 @@ export function resetMockTauri(): void {
   });
   mockOpenUrl.mockReset().mockResolvedValue(undefined);
   mockRevealItemInDir.mockReset().mockResolvedValue(undefined);
+  mockUpdaterCheck.mockReset().mockResolvedValue(null);
+  mockProcessRelaunch.mockReset().mockResolvedValue(undefined);
   mockWindowClose.mockReset().mockResolvedValue(undefined);
   mockWindowMinimize.mockReset().mockResolvedValue(undefined);
   mockWindowToggleMaximize.mockReset().mockResolvedValue(false);

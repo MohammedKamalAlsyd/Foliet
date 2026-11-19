@@ -698,13 +698,29 @@ export const AiChatPanel: React.FC<AiChatPanelProps> = ({ onJumpToPage }) => {
               </div>
             ) : (
               <div className="space-y-1">
-                <label className="text-[11px] font-medium text-muted-foreground">
-                  {llmProvider.toUpperCase()} API Key
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    {llmProvider.toUpperCase()} API Key
+                  </label>
+                  {apiKeys[llmProvider] && (
+                    <button
+                      type="button"
+                      onClick={() => void setApiKey(llmProvider, "")}
+                      aria-label={`Remove ${llmProvider} API key`}
+                      title="Remove saved API key"
+                      className="inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-destructive"
+                    >
+                      <X size={11} />
+                      <span>Remove</span>
+                    </button>
+                  )}
+                </div>
                 <Input
                   type="password"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={apiKeys[llmProvider] || ""}
-                  onChange={(e) => setApiKey(llmProvider, e.target.value)}
+                  onChange={(e) => void setApiKey(llmProvider, e.target.value)}
                   placeholder="sk-..."
                   className="h-8 text-xs font-mono"
                 />

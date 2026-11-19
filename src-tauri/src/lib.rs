@@ -2,6 +2,7 @@ mod pdf_exporter;
 mod pdf_models;
 mod pdf_reader;
 mod rag;
+mod secrets;
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -311,6 +312,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_sql::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(
             tauri_plugin_prevent_default::Builder::new()
                 .with_flags(Flags::FIND) // disables Ctrl+F / Cmd+F / F3 / Ctrl+G only
@@ -321,6 +324,9 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| format!("Failed to resolve app_data_dir: {}", e))?;
+            let secrets_state =
+                secrets::SecretsState::init(app_data_dir.clone(), &app.config().identifier);
+            app.manage(secrets_state);
             let rag_state = rag::RagState::init(app_data_dir)?;
             app.manage(rag_state);
             Ok(())
@@ -352,6 +358,9 @@ pub fn run() {
             rag::commands::rag_get_catalog,
             rag::commands::rag_get_document_chunks,
             rag::commands::rag_search,
+            secrets::load_api_secrets,
+            secrets::save_api_secret,
+            secrets::delete_api_secret,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Foliet application");

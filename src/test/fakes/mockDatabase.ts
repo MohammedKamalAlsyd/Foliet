@@ -23,6 +23,10 @@ export class InMemoryDocumentDatabase {
   public conversations = new Map<string, ChatConversation>();
   public summaries = new Map<string, StoredSummaryRecord>();
   public summaryBackups = new Map<string, StoredSummaryRecord>();
+  public legacySecrets: {
+    apiKeys: Record<string, string>;
+    embeddingApiKey: string;
+  } | null = null;
 
   public reset(): void {
     this.annotations.clear();
@@ -31,6 +35,7 @@ export class InMemoryDocumentDatabase {
     this.conversations.clear();
     this.summaries.clear();
     this.summaryBackups.clear();
+    this.legacySecrets = null;
   }
 
   public async getAnnotations(docId: string): Promise<PdfAnnotation[]> {
@@ -179,6 +184,18 @@ export class InMemoryDocumentDatabase {
   public async clearAll(): Promise<void> {
     this.reset();
   }
+
+  public async consumeLegacyApiSecrets(): Promise<{
+    apiKeys: Record<string, string>;
+    embeddingApiKey: string;
+  }> {
+    if (!this.legacySecrets) {
+      return { apiKeys: {}, embeddingApiKey: "" };
+    }
+    const found = structuredClone(this.legacySecrets);
+    this.legacySecrets = null;
+    return found;
+  }
 }
 
 export const mockDatabase = new InMemoryDocumentDatabase();
@@ -222,4 +239,5 @@ export const MockDocumentDatabase = {
     mockDatabase.deleteSummaryBackup(docId),
   deleteDocumentData: (docId: string) => mockDatabase.deleteDocumentData(docId),
   clearAll: () => mockDatabase.clearAll(),
+  consumeLegacyApiSecrets: () => mockDatabase.consumeLegacyApiSecrets(),
 };

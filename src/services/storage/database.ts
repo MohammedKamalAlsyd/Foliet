@@ -343,4 +343,89 @@ export class DocumentDatabase {
             DELETE FROM doc_summary_backups;
         `);
     }
+
+    /**
+     * Checks for any legacy plaintext API keys stored in older SQLite settings tables,
+     * extracts them for migration to encrypted Rust storage, and scrubs the plaintext rows.
+     */
+    public static async consumeLegacyApiSecrets(): Promise<{
+        apiKeys: Record<string, string>;
+        embeddingApiKey: string;
+    }> {
+        const apiKeys: Record<string, string> = {};
+        let embeddingApiKey = "";
+
+        try {
+            const tables = await this.query<{ name: string }>(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('settings', 'app_settings', 'ai_settings')",
+                [],
+                "legacy settings table probe",
+            );
+
+            for (const { name } of tables) {
+                const columns = await this.query<{ name: string }>(
+                    `PRAGMA table_info(${name})`,
+                    [],
+                    `legacy ${name} columns`,
+                );
+                const colNames = new Set(columns.map((c) => c.name));
+                const keyCol = colNames.has("key") ? "key" : colNames.has("id") ? "id" : null;
+                const valCol = colNames.has("value") ? "value" : colNames.has("data") ? "data" : null;
+                if (!keyCol || !valCol) continue;
+
+                const rows = await this.query<Record<string, unknown>>(
+                    `SELECT ${keyCol} AS k, ${valCol} AS v FROM ${name}`,
+                    [],
+                    `legacy ${name} rows`,
+                );
+
+                for (const row of rows) {
+                    const rowKey = typeof row.k === "string" ? row.k : "";
+                    const rawVal = typeof row.v === "string" ? row.v : "";
+                    if (!rawVal) continue;
+
+                    try {
+                        const parsed = JSON.parse(rawVal);
+                        const container =
+                            parsed && typeof parsed === "object" && "state" in parsed && parsed.state && typeof parsed.state === "object"
+                                ? (parsed.state as Record<string, unknown>)
+                                : (parsed as Record<string, unknown>);
+
+                        let touched = false;
+                        if (container && typeof container === "object") {
+                            if (container.apiKeys && typeof container.apiKeys === "object") {
+                                for (const [provider, val] of Object.entries(container.apiKeys as Record<string, unknown>)) {
+                                    if (typeof val === "string" && val.trim().length > 0) {
+                                        apiKeys[provider] = val;
+                                    }
+                                }
+                                delete container.apiKeys;
+                                touched = true;
+                            }
+                            if (typeof container.embeddingApiKey === "string") {
+                                if (container.embeddingApiKey.trim().length > 0) {
+                                    embeddingApiKey = container.embeddingApiKey;
+                                }
+                                delete container.embeddingApiKey;
+                                touched = true;
+                            }
+                        }
+
+                        if (touched && rowKey) {
+                            await this.execute(
+                                `UPDATE ${name} SET ${valCol} = $1 WHERE ${keyCol} = $2`,
+                                [JSON.stringify(parsed), rowKey],
+                            );
+                        }
+                    } catch {
+                        // Ignore non-JSON settings entries
+                    }
+                }
+            }
+        } catch {
+            // Safe no-op if SQLite is unavailable
+        }
+
+        return { apiKeys, embeddingApiKey };
+    }
 }

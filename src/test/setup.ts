@@ -19,9 +19,12 @@ import {
   mockDialogSave,
   mockFsWriteFile,
   mockOpenUrl,
+  mockProcessRelaunch,
   mockRevealItemInDir,
+  mockSecretsBackend,
   mockTauriInvoke,
   mockTauriListen,
+  mockUpdaterCheck,
   resetMockTauri,
 } from "@/test/fakes/mockTauri";
 import {
@@ -69,6 +72,15 @@ vi.mock("@tauri-apps/plugin-os", () => ({
 
 vi.mock("@tauri-apps/plugin-store", () => ({
   LazyStore: MockLazyStore,
+}));
+
+vi.mock("@tauri-apps/plugin-updater", () => ({
+  check: mockUpdaterCheck,
+}));
+
+vi.mock("@tauri-apps/plugin-process", () => ({
+  relaunch: mockProcessRelaunch,
+  exit: vi.fn(async () => {}),
 }));
 
 vi.mock("@/services/window", () => ({
@@ -369,6 +381,7 @@ export function resetAllTestState(): void {
     isAiStudioOpen: false,
     activeAiTab: "chat",
   });
+  mockSecretsBackend.apiKeys.openrouter = "sk-test-openrouter";
   useAiConfigStore.setState({
     llmProvider: DEFAULT_AI_SETTINGS.llmProvider,
     llmModel: DEFAULT_AI_SETTINGS.llmModel,
@@ -385,6 +398,7 @@ export function resetAllTestState(): void {
     embeddingModel: DEFAULT_AI_SETTINGS.embeddingModel,
     embeddingApiKey: "",
     hyperparameters: { ...DEFAULT_RAG_HYPERPARAMETERS },
+    secretsHydrated: false,
   });
   useChatStore.getState().cancelStreaming();
   useChatStore.setState({

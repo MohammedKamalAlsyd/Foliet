@@ -47,6 +47,21 @@ futures-util = "0.3"
 chrono = { version = "0.4", features = ["clock"] }
 tauri-plugin-prevent-default = "6.0.1"
 
+# Encrypted API key storage
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
+
+# Auto-updater and process lifecycle
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 [profile.release]
 codegen-units = 1
 lto = true

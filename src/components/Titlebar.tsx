@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   Plus,
   Loader2,
+  RefreshCw,
 } from "lucide-react";
 import { LogoIcon } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
@@ -29,9 +30,18 @@ const TRAFFIC_COLORS = {
 interface TitlebarProps {
   onRequestClose?: () => void;
   onNavigateHome?: () => void;
+  onCheckForUpdates?: () => void;
+  isCheckingUpdates?: boolean;
+  hasUpdateAvailable?: boolean;
 }
 
-export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
+export function Titlebar({
+  onRequestClose,
+  onNavigateHome,
+  onCheckForUpdates,
+  isCheckingUpdates = false,
+  hasUpdateAvailable = false,
+}: TitlebarProps) {
   const isMac = useSystemStore((s) => s.isMac);
   const shortcutModifier = useSystemStore((s) => s.shortcutModifier);
   const isDark = useSystemStore((s) => s.isDark);
@@ -272,8 +282,41 @@ export function Titlebar({ onRequestClose, onNavigateHome }: TitlebarProps) {
         )}
       </div>
 
-      {/* Right: Theme Toggle & Window Controls */}
+      {/* Right: Update Check, Theme Toggle & Window Controls */}
       <div className="flex h-full items-center justify-end gap-1">
+        {onCheckForUpdates && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={onCheckForUpdates}
+            disabled={isCheckingUpdates}
+            aria-label={
+              hasUpdateAvailable ? "Update available" : "Check for updates"
+            }
+            title={
+              hasUpdateAvailable
+                ? "Update available — click to install"
+                : isCheckingUpdates
+                  ? "Checking for updates…"
+                  : "Check for updates"
+            }
+            className="no-drag relative h-7 w-7 text-muted-foreground hover:text-foreground"
+          >
+            <RefreshCw
+              size={15}
+              strokeWidth={1.5}
+              className={cn(isCheckingUpdates && "animate-spin")}
+            />
+            {hasUpdateAvailable && !isCheckingUpdates && (
+              <span
+                aria-hidden="true"
+                className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-[var(--accent-brand,#2563EB)]"
+              />
+            )}
+          </Button>
+        )}
+
         <Button
           type="button"
           variant="ghost"

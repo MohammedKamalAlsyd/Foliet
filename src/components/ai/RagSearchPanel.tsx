@@ -478,15 +478,31 @@ export const RagSearchPanel: React.FC<RagSearchPanelProps> = ({
                 {(embeddingProvider === "voyage" ||
                   embeddingProvider === "openai") && (
                   <div className="space-y-1">
-                    <label className="text-[11px] font-medium text-muted-foreground">
-                      {embeddingProvider === "voyage"
-                        ? "Voyage API Key"
-                        : "OpenAI API Key"}
-                    </label>
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        {embeddingProvider === "voyage"
+                          ? "Voyage API Key"
+                          : "OpenAI API Key"}
+                      </label>
+                      {embeddingApiKey && (
+                        <button
+                          type="button"
+                          onClick={() => void setEmbeddingApiKey("")}
+                          aria-label="Remove embedding API key"
+                          title="Remove saved API key"
+                          className="inline-flex items-center gap-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-destructive"
+                        >
+                          <X size={11} />
+                          <span>Remove</span>
+                        </button>
+                      )}
+                    </div>
                     <Input
                       type="password"
+                      autoComplete="off"
+                      spellCheck={false}
                       value={embeddingApiKey}
-                      onChange={(e) => setEmbeddingApiKey(e.target.value)}
+                      onChange={(e) => void setEmbeddingApiKey(e.target.value)}
                       placeholder={
                         embeddingProvider === "voyage" ? "pa-..." : "sk-..."
                       }

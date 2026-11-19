@@ -84,15 +84,25 @@ export class SettingsStorage {
     public static async saveAiSettings(
         patch: Partial<AiSettings>,
     ): Promise<AiSettings> {
-        if (patch.apiKeys) {
-            const currentKeys = useAiConfigStore.getState().apiKeys;
-            useAiConfigStore.setState({
-                ...patch,
-                apiKeys: { ...currentKeys, ...patch.apiKeys },
-            });
-        } else {
-            useAiConfigStore.setState(patch as any);
+        const store = useAiConfigStore.getState();
+        const { apiKeys, embeddingApiKey, ...nonSecretPatch } = patch;
+
+        if (Object.keys(nonSecretPatch).length > 0) {
+            useAiConfigStore.setState(nonSecretPatch);
         }
+
+        if (apiKeys) {
+            for (const [provider, value] of Object.entries(apiKeys)) {
+                if (typeof value === "string") {
+                    await store.setApiKey(provider as LlmProvider, value);
+                }
+            }
+        }
+
+        if (embeddingApiKey !== undefined) {
+            await store.setEmbeddingApiKey(embeddingApiKey);
+        }
+
         return this.getAiSettings();
     }
 
