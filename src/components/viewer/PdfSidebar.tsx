@@ -28,22 +28,6 @@ interface PdfSidebarProps {
   onDeleteCrop: (id: string) => void;
 }
 
-const DEFAULT_WIDTH = 256;
-const MIN_WIDTH = 200;
-const MAX_WIDTH = 560;
-const WIDTH_STORAGE_KEY = "foliet:pdf-sidebar-width";
-
-const clampWidth = (w: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
-
-function readStoredWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(WIDTH_STORAGE_KEY));
-    return Number.isFinite(raw) && raw > 0 ? clampWidth(raw) : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
-}
-
 function OutlineItem({
   node,
   activeId,
@@ -184,9 +168,6 @@ export function PdfSidebar({
   onDeleteBookmark,
   onDeleteCrop,
 }: PdfSidebarProps) {
-  const [width, setWidth] = useState<number>(readStoredWidth);
-  const [isResizing, setIsResizing] = useState(false);
-
   const flatOutline = useMemo(() => {
     const items: { id: string; pageNumber: number; parentIds: string[] }[] = [];
     const walk = (nodes: PdfOutlineNode[], parentIds: string[]) => {
@@ -231,55 +212,10 @@ export function PdfSidebar({
     return latestId;
   }, [sortedBookmarks, currentPage]);
 
-  const updateWidth = (next: number) => {
-    const clamped = clampWidth(next);
-    setWidth(clamped);
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(clamped));
-    } catch {}
-    return clamped;
-  };
-
-  const handleResizePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    const startX = e.clientX;
-    const startWidth = width;
-    let latestWidth = startWidth;
-
-    setIsResizing(true);
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const onMove = (ev: PointerEvent) => {
-      latestWidth = clampWidth(startWidth + (ev.clientX - startX));
-      setWidth(latestWidth);
-    };
-
-    const onUp = () => {
-      setIsResizing(false);
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try {
-        localStorage.setItem(WIDTH_STORAGE_KEY, String(latestWidth));
-      } catch {}
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-    };
-
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-  };
-
   if (!isOpen) return null;
 
   return (
-    <aside
-      style={{ width }}
-      className="relative flex shrink-0 flex-col border-r border-border bg-muted/40 select-none"
-    >
+    <aside className="flex h-full w-full flex-col bg-muted/40 select-none">
       <Tabs defaultValue="outline" className="flex min-h-0 flex-1 flex-col">
         {/* Top switcher aligns 1:1 with the 48px PdfToolbar height and bottom hairline */}
         <div className="flex h-12 shrink-0 items-center border-b border-border bg-muted/30 px-2">
@@ -476,31 +412,6 @@ export function PdfSidebar({
           )}
         </TabsContent>
       </Tabs>
-
-      {/* Drag-to-resize handle */}
-      <div
-        role="separator"
-        tabIndex={0}
-        aria-orientation="vertical"
-        aria-label="Resize sidebar"
-        aria-valuemin={MIN_WIDTH}
-        aria-valuemax={MAX_WIDTH}
-        aria-valuenow={width}
-        title="Drag to resize · Double-click to reset"
-        onPointerDown={handleResizePointerDown}
-        onDoubleClick={() => updateWidth(DEFAULT_WIDTH)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") updateWidth(width - 16);
-          else if (e.key === "ArrowRight") updateWidth(width + 16);
-        }}
-        className={cn(
-          "absolute top-0 -right-1 z-20 h-full w-2 cursor-col-resize",
-          "after:absolute after:top-0 after:bottom-0 after:left-[3px] after:w-0.5 after:transition-colors after:duration-150 after:ease-[var(--ease-foliet)]",
-          isResizing
-            ? "after:bg-[var(--accent-brand)]"
-            : "hover:after:bg-[var(--accent-brand)]/60",
-        )}
-      />
     </aside>
   );
 }

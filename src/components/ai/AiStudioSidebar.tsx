@@ -2,12 +2,11 @@
  * Foliet - AI Studio Resizable Right Sidebar Shell
  *
  * Houses Lio Chat, RAG Semantic Vector Search, and Document Summarization.
- * Mirrors the structure, styling, and drag-to-resize behavior of PdfSidebar,
- * persisting width to localStorage. When Summarization Studio is open, renders
- * the resizable split-screen Living Summary pane alongside the live PDF viewer.
+ * When Summarization Studio is open, renders the split-screen Living Summary
+ * pane alongside the live PDF viewer inside ViewerView's ResizablePanelGroup.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   CheckCircle2,
@@ -31,7 +30,6 @@ import {
   isTextMarkupAnnotation,
   type PdfAnnotation,
 } from "@/types/annotations";
-import { cn } from "@/lib/utils";
 
 interface AiStudioSidebarProps {
   isOpen: boolean;
@@ -39,30 +37,11 @@ interface AiStudioSidebarProps {
   annotations?: PdfAnnotation[];
 }
 
-const DEFAULT_WIDTH = 360;
-const MIN_WIDTH = 300;
-const MAX_WIDTH = 620;
-const WIDTH_STORAGE_KEY = "foliet:ai-sidebar-width";
-
-const clampWidth = (w: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
-
-function readStoredWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(WIDTH_STORAGE_KEY));
-    return Number.isFinite(raw) && raw > 0 ? clampWidth(raw) : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
-}
-
 export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
   isOpen,
   onJumpToPage,
   annotations = [],
 }) => {
-  const [width, setWidth] = useState<number>(readStoredWidth);
-  const [isResizing, setIsResizing] = useState(false);
-
   const activeDoc = useDocumentStore((s) => s.activeDoc);
   const { activeAiTab, setActiveAiTab, setAiStudioOpen } = useAiStudioStore(
     useShallow((s) => ({
@@ -117,37 +96,6 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
     return { highlights, underlines, notes, crops, chats: savedChatsCount };
   }, [annotations, savedChatsCount]);
 
-  const updateWidth = (next: number) => {
-    const clamped = clampWidth(next);
-    setWidth(clamped);
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(clamped));
-    } catch {
-      // Ignore quota errors
-    }
-  };
-
-  const handleResizePointerDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setIsResizing(true);
-    const startX = e.clientX;
-    const startWidth = width;
-
-    const onPointerMove = (moveEvt: PointerEvent) => {
-      const delta = moveEvt.clientX - startX;
-      updateWidth(startWidth - delta);
-    };
-
-    const onPointerUp = () => {
-      setIsResizing(false);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-  };
-
   if (!isOpen && !isSummaryWorkspaceOpen) return null;
 
   if (isSummaryWorkspaceOpen) {
@@ -161,12 +109,8 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
 
   return (
     <aside
-      style={{ width }}
       aria-label="AI Studio Sidebar"
-      className={cn(
-        "relative z-20 flex h-full shrink-0 flex-col border-l border-border bg-card shadow-[-4px_0_12px_rgba(0,0,0,0.03)]",
-        isResizing && "select-none",
-      )}
+      className="flex h-full w-full flex-col bg-card"
     >
       <Tabs
         value={
@@ -315,31 +259,6 @@ export const AiStudioSidebar: React.FC<AiStudioSidebarProps> = ({
           </div>
         </TabsContent>
       </Tabs>
-
-      {/* Drag-to-resize handle on LEFT edge */}
-      <div
-        role="separator"
-        tabIndex={0}
-        aria-orientation="vertical"
-        aria-label="Resize AI Studio sidebar"
-        aria-valuemin={MIN_WIDTH}
-        aria-valuemax={MAX_WIDTH}
-        aria-valuenow={width}
-        title="Drag to resize · Double-click to reset"
-        onPointerDown={handleResizePointerDown}
-        onDoubleClick={() => updateWidth(DEFAULT_WIDTH)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") updateWidth(width + 16);
-          else if (e.key === "ArrowRight") updateWidth(width - 16);
-        }}
-        className={cn(
-          "absolute top-0 -left-1 z-20 h-full w-2 cursor-col-resize select-none",
-          "after:absolute after:top-0 after:bottom-0 after:left-[3px] after:w-0.5 after:transition-colors after:duration-150 after:ease-[var(--ease-foliet)]",
-          isResizing
-            ? "after:bg-[var(--accent-brand)]"
-            : "hover:after:bg-[var(--accent-brand)]/60",
-        )}
-      />
     </aside>
   );
 };

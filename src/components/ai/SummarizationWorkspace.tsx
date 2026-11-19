@@ -1,7 +1,7 @@
 /**
  * Foliet - Split-Screen Living Summary Workspace
  *
- * Renders as a resizable right split pane alongside the live PDF viewer:
+ * Renders inside ViewerView's right ResizablePanel alongside the live PDF viewer:
  * - Minimal header: doc title, chapter selector & jump menu, save status,
  *   Copy, Export .md, Export .docx, Close split
  * - Central Tiptap Markdown editor with `[Page X]` citation spotlighting & figure drop
@@ -56,22 +56,6 @@ import { cn } from "@/lib/utils";
 interface SummarizationWorkspaceProps {
   annotations?: PdfAnnotation[];
   onJumpToPage?: (page: number) => void;
-}
-
-const DEFAULT_WIDTH = 540;
-const MIN_WIDTH = 380;
-const MAX_WIDTH = 920;
-const WIDTH_STORAGE_KEY = "foliet:summary-split-width";
-
-const clampWidth = (w: number) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
-
-function readStoredWidth(): number {
-  try {
-    const raw = Number(localStorage.getItem(WIDTH_STORAGE_KEY));
-    return Number.isFinite(raw) && raw > 0 ? clampWidth(raw) : DEFAULT_WIDTH;
-  } catch {
-    return DEFAULT_WIDTH;
-  }
 }
 
 const STYLE_PRESETS: Array<{ value: SummaryFocusMode; label: string }> = [
@@ -147,8 +131,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
   const pendingSaveMarkdownRef = useRef<string | null>(null);
   const jumpMenuRef = useRef<HTMLDivElement | null>(null);
 
-  const [width, setWidth] = useState<number>(readStoredWidth);
-  const [isResizing, setIsResizing] = useState(false);
   const [fallbackAnnotations, setFallbackAnnotations] = useState<
     PdfAnnotation[]
   >([]);
@@ -473,36 +455,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     }
   };
 
-  const updateWidth = (next: number) => {
-    const clamped = clampWidth(next);
-    setWidth(clamped);
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, String(clamped));
-    } catch {
-      // Ignore quota errors
-    }
-  };
-
-  const handleResizePointerDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    setIsResizing(true);
-    const startX = e.clientX;
-    const startWidth = width;
-
-    const onPointerMove = (moveEvt: PointerEvent) => {
-      updateWidth(startWidth - (moveEvt.clientX - startX));
-    };
-
-    const onPointerUp = () => {
-      setIsResizing(false);
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-    };
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-  };
-
   if (!isSummaryWorkspaceOpen || !activeDoc) return null;
 
   const mascotState: MascotState = isSummarizing
@@ -530,12 +482,8 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
 
   return (
     <aside
-      style={{ width }}
       aria-label="Living Summary Split Pane"
-      className={cn(
-        "relative z-20 flex h-full shrink-0 flex-col border-l border-border bg-card shadow-[-4px_0_16px_rgba(0,0,0,0.05)]",
-        isResizing && "select-none",
-      )}
+      className="flex h-full w-full flex-col bg-card"
     >
       {/* Top Header: Title, Chapter Selector + Jump, Status, Exports, Close Split */}
       <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/30 px-3">
@@ -868,31 +816,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
           </div>
         </div>
       </footer>
-
-      {/* Drag-to-resize handle on LEFT edge */}
-      <div
-        role="separator"
-        tabIndex={0}
-        aria-orientation="vertical"
-        aria-label="Resize Summary split pane"
-        aria-valuemin={MIN_WIDTH}
-        aria-valuemax={MAX_WIDTH}
-        aria-valuenow={width}
-        title="Drag to resize · Double-click to reset"
-        onPointerDown={handleResizePointerDown}
-        onDoubleClick={() => updateWidth(DEFAULT_WIDTH)}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") updateWidth(width + 16);
-          else if (e.key === "ArrowRight") updateWidth(width - 16);
-        }}
-        className={cn(
-          "absolute top-0 -left-1 z-30 h-full w-2 cursor-col-resize select-none",
-          "after:absolute after:top-0 after:bottom-0 after:left-[3px] after:w-0.5 after:transition-colors after:duration-150 after:ease-[var(--ease-foliet)]",
-          isResizing
-            ? "after:bg-[var(--accent-brand)]"
-            : "hover:after:bg-[var(--accent-brand)]/60",
-        )}
-      />
     </aside>
   );
 };

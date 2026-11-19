@@ -3,10 +3,15 @@ import { Document, pdfjs } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import { tinykeys } from "tinykeys";
+import { AiStudioSidebar } from "@/components/ai/AiStudioSidebar";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { NoteEditorPortal } from "@/components/viewer/NoteEditorPortal";
 import { PdfPage } from "@/components/viewer/PdfPage";
 import { PdfSidebar } from "@/components/viewer/PdfSidebar";
-import { AiStudioSidebar } from "@/components/ai/AiStudioSidebar";
 import { PdfToolbar } from "@/components/viewer/PdfToolbar";
 import { SearchOverlay } from "@/components/viewer/SearchOverlay";
 import { ViewerHeader } from "@/components/viewer/ViewerHeader";
@@ -15,18 +20,16 @@ import { usePdfSession } from "@/hooks/usePdfSession";
 import { usePdfZoom } from "@/hooks/usePdfZoom";
 import { useToolManager } from "@/hooks/useToolManager";
 import { PDF_DOCUMENT_OPTIONS } from "@/services/pdf";
+import { useAiStudioStore } from "@/stores/aiStudioStore";
 import {
   useAnnotationStore,
   useAnnotationTemporal,
 } from "@/stores/annotationStore";
 import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
-import { useAiStudioStore } from "@/stores/aiStudioStore";
+import { useSummaryStore } from "@/stores/summaryStore";
 import { useSystemStore } from "@/stores/systemStore";
 import type { Dimensions } from "@/types/common";
-import {
-  type PdfAnnotation,
-  isNoteAnnotation,
-} from "@/types/annotations";
+import { type PdfAnnotation, isNoteAnnotation } from "@/types/annotations";
 
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -44,6 +47,10 @@ export function ViewerView() {
   const sidebarOpen = useSystemStore((s) => s.sidebarOpen);
   const toggleSidebar = useSystemStore((s) => s.toggleSidebar);
   const isAiStudioOpen = useAiStudioStore((s) => s.isAiStudioOpen);
+  const isSummaryWorkspaceOpen = useSummaryStore(
+    (s) => s.isSummaryWorkspaceOpen,
+  );
+  const isRightPanelOpen = isAiStudioOpen || isSummaryWorkspaceOpen;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const isRestoringPageRef = useRef(false);
@@ -68,8 +75,14 @@ export function ViewerView() {
 
   const canUndo = useAnnotationTemporal((s) => s.pastStates.length > 0);
   const canRedo = useAnnotationTemporal((s) => s.futureStates.length > 0);
-  const undo = useCallback(() => useAnnotationStore.temporal.getState().undo(), []);
-  const redo = useCallback(() => useAnnotationStore.temporal.getState().redo(), []);
+  const undo = useCallback(
+    () => useAnnotationStore.temporal.getState().undo(),
+    [],
+  );
+  const redo = useCallback(
+    () => useAnnotationStore.temporal.getState().redo(),
+    [],
+  );
 
   const toolManager = useToolManager();
 
@@ -285,164 +298,195 @@ export function ViewerView() {
       />
 
       <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <PdfSidebar
-          isOpen={sidebarOpen}
-          outline={session.outline}
-          bookmarks={bookmarks}
-          crops={cropAnnotations}
-          currentPage={currentPage}
-          pageLabels={session.pageLabels}
-          onJumpToPage={jumpToPage}
-          onAddBookmark={(p) =>
-            useAnnotationStore.getState().toggleBookmark(p)
-          }
-          onDeleteBookmark={(id) =>
-            useAnnotationStore.getState().deleteBookmark(id)
-          }
-          onDeleteCrop={(id) =>
-            useAnnotationStore.getState().deleteCrop(id, activeDoc?.id)
-          }
-        />
-
-        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
-          <PdfToolbar
-            presets={toolManager.presets}
-            activeState={toolManager.activeState}
-            canUndo={canUndo}
-            canRedo={canRedo}
-            onUndo={undo}
-            onRedo={redo}
-            onTogglePreset={toolManager.togglePreset}
-            onSetSelectMode={toolManager.setSelectMode}
-            onSetStrokeWidth={toolManager.setStrokeWidth}
-            onSetUnderlineStyle={toolManager.setUnderlineStyle}
-            onAddPreset={async (p) => {
-              toolManager.addPreset(p);
-            }}
-            onUpdatePreset={async (p) => {
-              toolManager.updatePreset(p);
-            }}
-            onRemovePreset={async (id) => {
-              toolManager.removePreset(id);
-            }}
-            onResetPresets={async () => {
-              toolManager.resetPresets();
-            }}
-          />
-
-          <div className="relative flex min-h-0 flex-1 overflow-hidden">
-            <SearchOverlay
-              isOpen={search.isSearchOpen}
-              searchQuery={search.searchQuery}
-              isSearching={search.isSearching}
-              totalMatches={search.searchResults.length}
-              currentMatchIndex={search.currentMatchIndex}
-              searchInputRef={search.searchInputRef}
-              onQueryChange={(q) => {
-                search.setSearchQuery(q);
-                search.executeSearch(q);
-              }}
-              onNext={search.handleSearchNext}
-              onPrev={search.handleSearchPrev}
-              onClose={search.closeSearch}
-            />
-
-            <div
-              ref={scrollRef}
-              className={`relative flex-1 overflow-auto p-6 ${isCtrlHeld ? "ctrl-active" : ""}`}
+        <ResizablePanelGroup orientation="horizontal" className="h-full w-full">
+          {sidebarOpen && (
+            <ResizablePanel
+              id="pdf-sidebar"
+              defaultSize="256px"
+              minSize="200px"
+              maxSize="560px"
             >
-              <Document
-                file={pdfSource}
-                options={PDF_DOCUMENT_OPTIONS}
-                externalLinkTarget="_blank"
-                externalLinkRel="noopener noreferrer"
-                onItemClick={handleDocumentItemClick}
-                onLoadSuccess={session.handleDocumentLoadSuccess}
-                onLoadError={session.handleDocumentLoadError}
-                loading={null}
-              >
-                <div
-                  style={{
-                    height: `${rowVirtualizer.getTotalSize()}px`,
-                    width: "100%",
-                    position: "relative",
+              <PdfSidebar
+                isOpen={sidebarOpen}
+                outline={session.outline}
+                bookmarks={bookmarks}
+                crops={cropAnnotations}
+                currentPage={currentPage}
+                pageLabels={session.pageLabels}
+                onJumpToPage={jumpToPage}
+                onAddBookmark={(p) =>
+                  useAnnotationStore.getState().toggleBookmark(p)
+                }
+                onDeleteBookmark={(id) =>
+                  useAnnotationStore.getState().deleteBookmark(id)
+                }
+                onDeleteCrop={(id) =>
+                  useAnnotationStore.getState().deleteCrop(id, activeDoc?.id)
+                }
+              />
+            </ResizablePanel>
+          )}
+          {sidebarOpen && (
+            <ResizableHandle className="transition-colors hover:bg-[var(--accent-brand)]/60 active:bg-[var(--accent-brand)]" />
+          )}
+
+          <ResizablePanel id="pdf-viewer" minSize="220px">
+            <div className="relative flex h-full w-full min-w-0 flex-col overflow-hidden">
+              <PdfToolbar
+                presets={toolManager.presets}
+                activeState={toolManager.activeState}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={undo}
+                onRedo={redo}
+                onTogglePreset={toolManager.togglePreset}
+                onSetSelectMode={toolManager.setSelectMode}
+                onSetStrokeWidth={toolManager.setStrokeWidth}
+                onSetUnderlineStyle={toolManager.setUnderlineStyle}
+                onAddPreset={async (p) => {
+                  toolManager.addPreset(p);
+                }}
+                onUpdatePreset={async (p) => {
+                  toolManager.updatePreset(p);
+                }}
+                onRemovePreset={async (id) => {
+                  toolManager.removePreset(id);
+                }}
+                onResetPresets={async () => {
+                  toolManager.resetPresets();
+                }}
+              />
+
+              <div className="relative flex min-h-0 flex-1 overflow-hidden">
+                <SearchOverlay
+                  isOpen={search.isSearchOpen}
+                  searchQuery={search.searchQuery}
+                  isSearching={search.isSearching}
+                  totalMatches={search.searchResults.length}
+                  currentMatchIndex={search.currentMatchIndex}
+                  searchInputRef={search.searchInputRef}
+                  onQueryChange={(q) => {
+                    search.setSearchQuery(q);
+                    search.executeSearch(q);
                   }}
+                  onNext={search.handleSearchNext}
+                  onPrev={search.handleSearchPrev}
+                  onClose={search.closeSearch}
+                />
+
+                <div
+                  ref={scrollRef}
+                  className={`relative flex-1 overflow-auto p-6 ${isCtrlHeld ? "ctrl-active" : ""}`}
                 >
-                  {virtualItems.map((virtualRow: VirtualItem) => {
-                    const pageNum = virtualRow.index + 1;
-                    const dim =
-                      pageDimensions[pageNum] ??
-                      pageDimensions[1] ??
-                      DEFAULT_DIM;
+                  <Document
+                    file={pdfSource}
+                    options={PDF_DOCUMENT_OPTIONS}
+                    externalLinkTarget="_blank"
+                    externalLinkRel="noopener noreferrer"
+                    onItemClick={handleDocumentItemClick}
+                    onLoadSuccess={session.handleDocumentLoadSuccess}
+                    onLoadError={session.handleDocumentLoadError}
+                    loading={null}
+                  >
+                    <div
+                      style={{
+                        height: `${rowVirtualizer.getTotalSize()}px`,
+                        width: "100%",
+                        position: "relative",
+                      }}
+                    >
+                      {virtualItems.map((virtualRow: VirtualItem) => {
+                        const pageNum = virtualRow.index + 1;
+                        const dim =
+                          pageDimensions[pageNum] ??
+                          pageDimensions[1] ??
+                          DEFAULT_DIM;
 
-                    return (
-                      <div
-                        key={virtualRow.key}
-                        data-index={virtualRow.index}
-                        data-page-number={pageNum}
-                        ref={rowVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          transform: `translateY(${virtualRow.start}px)`,
-                          display: "flex",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <PdfPage
-                          pageNumber={pageNum}
-                          zoomLevel={zoomLevel}
-                          renderZoomLevel={renderZoom}
-                          estimatedWidth={dim.width}
-                          estimatedHeight={dim.height}
-                          activeTool={toolManager.activeState.toolType}
-                          activeColor={toolManager.activeState.color}
-                          activeStrokeWidth={
-                            toolManager.activeState.strokeWidth
-                          }
-                          activeUnderlineStyle={
-                            toolManager.activeState.underlineStyle
-                          }
-                          pageAnnotations={
-                            annotationsByPage.get(pageNum) ?? EMPTY_ANNOTS
-                          }
-                          registerPageRef={noop}
-                          onAddAnnotation={
-                            useAnnotationStore.getState().addAnnotation
-                          }
-                          onDeleteAnnotation={
-                            useAnnotationStore.getState().deleteAnnotation
-                          }
-                          onNoteClick={(note, pos) =>
-                            useAnnotationStore
-                              .getState()
-                              .setEditingNote(note.id, pos)
-                          }
-                          onAddFigureCrop={handleAddFigureCrop}
-                          onDimensionsDiscovered={handleDimensionsDiscovered}
-                        />
-                      </div>
-                    );
-                  })}
+                        return (
+                          <div
+                            key={virtualRow.key}
+                            data-index={virtualRow.index}
+                            data-page-number={pageNum}
+                            ref={rowVirtualizer.measureElement}
+                            style={{
+                              position: "absolute",
+                              top: 0,
+                              left: 0,
+                              width: "100%",
+                              transform: `translateY(${virtualRow.start}px)`,
+                              display: "flex",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <PdfPage
+                              pageNumber={pageNum}
+                              zoomLevel={zoomLevel}
+                              renderZoomLevel={renderZoom}
+                              estimatedWidth={dim.width}
+                              estimatedHeight={dim.height}
+                              activeTool={toolManager.activeState.toolType}
+                              activeColor={toolManager.activeState.color}
+                              activeStrokeWidth={
+                                toolManager.activeState.strokeWidth
+                              }
+                              activeUnderlineStyle={
+                                toolManager.activeState.underlineStyle
+                              }
+                              pageAnnotations={
+                                annotationsByPage.get(pageNum) ?? EMPTY_ANNOTS
+                              }
+                              registerPageRef={noop}
+                              onAddAnnotation={
+                                useAnnotationStore.getState().addAnnotation
+                              }
+                              onDeleteAnnotation={
+                                useAnnotationStore.getState().deleteAnnotation
+                              }
+                              onNoteClick={(note, pos) =>
+                                useAnnotationStore
+                                  .getState()
+                                  .setEditingNote(note.id, pos)
+                              }
+                              onAddFigureCrop={handleAddFigureCrop}
+                              onDimensionsDiscovered={
+                                handleDimensionsDiscovered
+                              }
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </Document>
                 </div>
-              </Document>
-            </div>
 
-            {isCtrlHeld && (
-              <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-[var(--shadow-sm)]">
-                Links active
+                {isCtrlHeld && (
+                  <div className="pointer-events-none absolute bottom-4 left-1/2 z-40 -translate-x-1/2 rounded-md border border-border bg-card px-3 py-1 text-xs text-muted-foreground shadow-[var(--shadow-sm)]">
+                    Links active
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          </ResizablePanel>
 
-        <AiStudioSidebar
-          isOpen={isAiStudioOpen}
-          onJumpToPage={jumpToPage}
-          annotations={studioAnnotations}
-        />
+          {isRightPanelOpen && (
+            <ResizableHandle className="transition-colors hover:bg-[var(--accent-brand)]/60 active:bg-[var(--accent-brand)]" />
+          )}
+          {isRightPanelOpen && (
+            <ResizablePanel
+              key={isSummaryWorkspaceOpen ? "summary-split" : "ai-studio"}
+              id={isSummaryWorkspaceOpen ? "summary-split" : "ai-studio"}
+              defaultSize={isSummaryWorkspaceOpen ? "540px" : "360px"}
+              minSize={isSummaryWorkspaceOpen ? "380px" : "300px"}
+              maxSize={isSummaryWorkspaceOpen ? "920px" : "620px"}
+            >
+              <AiStudioSidebar
+                isOpen={isAiStudioOpen}
+                onJumpToPage={jumpToPage}
+                annotations={studioAnnotations}
+              />
+            </ResizablePanel>
+          )}
+        </ResizablePanelGroup>
       </div>
 
       <NoteEditorPortal

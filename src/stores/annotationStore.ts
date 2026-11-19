@@ -22,19 +22,20 @@ interface DirtySources {
 }
 
 const sameBookmarks = (a: BookmarkItem[], b: BookmarkItem[]) =>
-    a.length === b.length &&
-    a.every(
-        (x, i) =>
-            x.id === b[i].id &&
-            x.pageNumber === b[i].pageNumber &&
-            x.title === b[i].title,
-    );
+    a === b ||
+    (a.length === b.length &&
+        a.every(
+            (x, i) =>
+                x.id === b[i].id &&
+                x.pageNumber === b[i].pageNumber &&
+                x.title === b[i].title,
+        ));
 
 const sameCrops = (a: CropAnnotation[], b: CropAnnotation[]) =>
-    a.length === b.length && a.every((x, i) => x.id === b[i].id);
+    a === b || (a.length === b.length && a.every((x, i) => x.id === b[i].id));
 
 const sameAnnotations = (a: PdfAnnotation[], b: PdfAnnotation[]) =>
-    a.length === b.length && a.every((x, i) => x === b[i]);
+    a === b || (a.length === b.length && a.every((x, i) => x === b[i]));
 
 export interface AnnotationState {
     docId: string | null;
@@ -80,24 +81,6 @@ export interface AnnotationState {
     clear: () => void;
 }
 
-const syncDirtyState = (state: AnnotationState) => {
-    const annotDirty = !sameAnnotations(state.annotations, state.savedAnnotations);
-    const bmDirty = !sameBookmarks(state.bookmarks, state.savedBookmarks);
-    const cropDirty = !sameCrops(state.cropAnnotations, state.savedCrops);
-
-    state.dirtySources = {
-        annotations: annotDirty,
-        bookmarks: bmDirty,
-        crops: cropDirty,
-    };
-    state.isDirty = annotDirty || bmDirty || cropDirty;
-
-    const docStore = useDocumentStore.getState();
-    docStore.setDirtySource("annotations", annotDirty);
-    docStore.setDirtySource("bookmarks", bmDirty);
-    docStore.setDirtySource("crops", cropDirty);
-};
-
 export const useAnnotationStore = create<AnnotationState>()(
     temporal(
         immer((set, get) => ({
@@ -141,8 +124,6 @@ export const useAnnotationStore = create<AnnotationState>()(
                         state.savedCrops = crops;
                         state.bookmarks = savedBookmarks;
                         state.savedBookmarks = savedBookmarks;
-                        state.dirtySources = { annotations: false, bookmarks: false, crops: false };
-                        state.isDirty = false;
                         if (savedAnnots.length > 0 || fallbackAnnots?.length) {
                             state.seededDocId = docId;
                         }
@@ -159,7 +140,6 @@ export const useAnnotationStore = create<AnnotationState>()(
                 set((state) => {
                     state.hasEditedAnnotations = true;
                     state.annotations.push(annot);
-                    syncDirtyState(state);
                 }),
 
             updateAnnotation: (annot) =>
@@ -169,18 +149,12 @@ export const useAnnotationStore = create<AnnotationState>()(
                     if (idx !== -1) {
                         state.annotations[idx] = annot;
                     }
-                    syncDirtyState(state);
                 }),
 
             deleteAnnotation: (id) =>
                 set((state) => {
                     state.hasEditedAnnotations = true;
                     state.annotations = state.annotations.filter((a) => a.id !== id);
-                    if (state.editingNoteId === id) {
-                        state.editingNoteId = null;
-                        state.noteAnchorPos = null;
-                    }
-                    syncDirtyState(state);
                 }),
 
             addCrop: async (crop, targetDocId) => {
@@ -244,7 +218,6 @@ export const useAnnotationStore = create<AnnotationState>()(
                     if (!state.annotations.some((a) => a.id === annot.id)) {
                         state.annotations.push(annot);
                         state.hasEditedAnnotations = true;
-                        syncDirtyState(state);
                     }
                 });
             },
@@ -262,13 +235,11 @@ export const useAnnotationStore = create<AnnotationState>()(
                             createdAt: new Date().toISOString(),
                         });
                     }
-                    syncDirtyState(state);
                 }),
 
             deleteBookmark: (id) =>
                 set((state) => {
                     state.bookmarks = state.bookmarks.filter((b) => b.id !== id);
-                    syncDirtyState(state);
                 }),
 
             setExtractedAnnotations: (extracted) => {
@@ -313,20 +284,14 @@ export const useAnnotationStore = create<AnnotationState>()(
                     ];
 
                     if (readingPos) {
-                        promises.push(
-                            DocumentCatalogStorage.updateDocument(docId, {
-                                lastPage: readingPos.lastPage,
-                                zoom: readingPos.zoom,
-                                pageCount: readingPos.pageCount,
-                                annotationCount: annotations.length + cropAnnotations.length,
-                            }),
-                        );
-                        useLibraryStore.getState().updateDocumentInStore(docId, {
+                        const meta = {
                             lastPage: readingPos.lastPage,
                             zoom: readingPos.zoom,
                             pageCount: readingPos.pageCount,
                             annotationCount: annotations.length + cropAnnotations.length,
-                        });
+                        };
+                        promises.push(DocumentCatalogStorage.updateDocument(docId, meta));
+                        useLibraryStore.getState().updateDocumentInStore(docId, meta);
                     }
 
                     await Promise.all(promises);
@@ -336,11 +301,9 @@ export const useAnnotationStore = create<AnnotationState>()(
                     }
 
                     set((state) => {
-                        state.savedAnnotations = [...state.annotations];
-                        state.savedBookmarks = [...state.bookmarks];
-                        state.savedCrops = [...state.cropAnnotations];
-                        state.dirtySources = { annotations: false, bookmarks: false, crops: false };
-                        state.isDirty = false;
+                        state.savedAnnotations = annotations;
+                        state.savedBookmarks = bookmarks;
+                        state.savedCrops = cropAnnotations;
                     });
 
                     useDocumentStore.getState().clearDirty();
@@ -353,7 +316,7 @@ export const useAnnotationStore = create<AnnotationState>()(
                 }
             },
 
-            clear: () =>
+            clear: () => {
                 set((state) => {
                     state.docId = null;
                     state.annotations = [];
@@ -362,20 +325,64 @@ export const useAnnotationStore = create<AnnotationState>()(
                     state.savedAnnotations = [];
                     state.savedBookmarks = [];
                     state.savedCrops = [];
-                    state.dirtySources = { annotations: false, bookmarks: false, crops: false };
-                    state.isDirty = false;
                     state.hasEditedAnnotations = false;
                     state.seededDocId = null;
                     state.editingNoteId = null;
                     state.noteAnchorPos = null;
-                }),
+                });
+                useAnnotationStore.temporal.getState().clear();
+                useDocumentStore.getState().clearDirty();
+            },
         })),
         {
             limit: 50,
             partialize: (state) => ({ annotations: state.annotations }),
+            equality: (past, curr) => past.annotations === curr.annotations,
         },
     ),
 );
+
+useAnnotationStore.subscribe((state, prev) => {
+    const changed =
+        state.annotations !== prev.annotations ||
+        state.savedAnnotations !== prev.savedAnnotations ||
+        state.bookmarks !== prev.bookmarks ||
+        state.savedBookmarks !== prev.savedBookmarks ||
+        state.cropAnnotations !== prev.cropAnnotations ||
+        state.savedCrops !== prev.savedCrops;
+
+    if (!changed) return;
+
+    const dirtySources: DirtySources = {
+        annotations: !sameAnnotations(state.annotations, state.savedAnnotations),
+        bookmarks: !sameBookmarks(state.bookmarks, state.savedBookmarks),
+        crops: !sameCrops(state.cropAnnotations, state.savedCrops),
+    };
+    const isDirty =
+        dirtySources.annotations || dirtySources.bookmarks || dirtySources.crops;
+    const noteRemoved =
+        Boolean(state.editingNoteId) &&
+        !state.annotations.some((a) => a.id === state.editingNoteId);
+
+    if (
+        state.dirtySources.annotations !== dirtySources.annotations ||
+        state.dirtySources.bookmarks !== dirtySources.bookmarks ||
+        state.dirtySources.crops !== dirtySources.crops ||
+        state.isDirty !== isDirty ||
+        noteRemoved
+    ) {
+        useAnnotationStore.setState({
+            dirtySources,
+            isDirty,
+            ...(noteRemoved ? { editingNoteId: null, noteAnchorPos: null } : {}),
+        });
+    }
+
+    const docStore = useDocumentStore.getState();
+    docStore.setDirtySource("annotations", dirtySources.annotations);
+    docStore.setDirtySource("bookmarks", dirtySources.bookmarks);
+    docStore.setDirtySource("crops", dirtySources.crops);
+});
 
 /** Hook to consume temporal (undo/redo) state reactively */
 export const useAnnotationTemporal = <T>(
