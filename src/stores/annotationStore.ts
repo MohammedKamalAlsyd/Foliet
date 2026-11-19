@@ -64,6 +64,7 @@ export interface AnnotationState {
             y: number;
             width: number;
             height: number;
+            caption?: string;
         },
         docId?: string,
     ) => Promise<CropAnnotation | undefined>;
@@ -167,6 +168,7 @@ export const useAnnotationStore = create<AnnotationState>()(
                     toolType: "area_select",
                     color: "#06B6D4",
                     imageUrl: `idb://${id}`,
+                    ...(crop.caption ? { caption: crop.caption } : {}),
                     createdAt: new Date().toISOString(),
                     x: crop.x,
                     y: crop.y,

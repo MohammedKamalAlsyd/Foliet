@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Document, pdfjs } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
@@ -29,7 +36,11 @@ import { getActivePdfSource, useDocumentStore } from "@/stores/documentStore";
 import { useSummaryStore } from "@/stores/summaryStore";
 import { useSystemStore } from "@/stores/systemStore";
 import type { Dimensions } from "@/types/common";
-import { type PdfAnnotation, isNoteAnnotation } from "@/types/annotations";
+import {
+  type NoteAnnotation,
+  type PdfAnnotation,
+  isNoteAnnotation,
+} from "@/types/annotations";
 
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -39,6 +50,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 const EMPTY_ANNOTS: PdfAnnotation[] = [];
 const DEFAULT_DIM: Dimensions = { width: 612, height: 792 };
+const PAGE_GAP = 28;
 const noop = () => {};
 
 export function ViewerView() {
@@ -117,10 +129,15 @@ export function ViewerView() {
     estimateSize: (index: number) => {
       const pageNum = index + 1;
       const dim = pageDimensions[pageNum] ?? pageDimensions[1] ?? DEFAULT_DIM;
-      return Math.round((dim.height * zoomLevel) / 100) + 24;
+      return Math.round((dim.height * zoomLevel) / 100);
     },
+    gap: PAGE_GAP,
     overscan: 2,
   });
+
+  useLayoutEffect(() => {
+    rowVirtualizer.measure();
+  }, [zoomLevel, pageDimensions, rowVirtualizer]);
 
   const jumpToPage = useCallback(
     (pageNum: number) => {
@@ -249,6 +266,12 @@ export function ViewerView() {
     [jumpToPage, session.pdfProxy],
   );
 
+  const handleNoteClick = useCallback(
+    (note: NoteAnnotation, pos: { x: number; y: number }) =>
+      useAnnotationStore.getState().setEditingNote(note.id, pos),
+    [],
+  );
+
   const handleAddFigureCrop = useCallback(
     (crop: {
       pageNumber: number;
@@ -257,6 +280,7 @@ export function ViewerView() {
       y: number;
       width: number;
       height: number;
+      caption?: string;
     }) => useAnnotationStore.getState().addCrop(crop, activeDoc?.id),
     [activeDoc?.id],
   );
@@ -406,7 +430,6 @@ export function ViewerView() {
                           <div
                             key={virtualRow.key}
                             data-index={virtualRow.index}
-                            data-page-number={pageNum}
                             ref={rowVirtualizer.measureElement}
                             style={{
                               position: "absolute",
@@ -442,11 +465,7 @@ export function ViewerView() {
                               onDeleteAnnotation={
                                 useAnnotationStore.getState().deleteAnnotation
                               }
-                              onNoteClick={(note, pos) =>
-                                useAnnotationStore
-                                  .getState()
-                                  .setEditingNote(note.id, pos)
-                              }
+                              onNoteClick={handleNoteClick}
                               onAddFigureCrop={handleAddFigureCrop}
                               onDimensionsDiscovered={
                                 handleDimensionsDiscovered
