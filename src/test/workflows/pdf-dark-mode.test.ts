@@ -63,7 +63,7 @@ describe("Intelligent PDF Dark Mode Classifier", () => {
 
     expect(result.classification).toBe("already-dark");
     expect(result.smartFilter).toBe(ALREADY_DARK_FILTER);
-    expect(result.smartFilter).not.toContain("invert(");
+    expect((result.smartFilter ?? "").includes("invert(")).toBe(false);
     expect(result.smartIsDarkSurface).toBe(true);
   });
 
@@ -88,7 +88,7 @@ describe("Intelligent PDF Dark Mode Classifier", () => {
 
     expect(result.classification).toBe("cover-or-artwork");
     expect(result.smartFilter).toBe(COVER_COMFORT_FILTER);
-    expect(result.smartFilter).not.toContain("invert(");
+    expect((result.smartFilter ?? "").includes("invert(")).toBe(false);
     expect(result.reasonLabel).toBe("Cover preserved");
   });
 
@@ -109,7 +109,7 @@ describe("Intelligent PDF Dark Mode Classifier", () => {
 
     expect(result.classification).toBe("cover-or-artwork");
     expect(result.smartFilter).toBe(COVER_COMFORT_FILTER);
-    expect(result.smartFilter).not.toContain("invert(");
+    expect((result.smartFilter ?? "").includes("invert(")).toBe(false);
   });
 
   it("detects yellowed/sepia scanned textbook pages and applies adaptive pre-normalization before inversion", () => {
@@ -182,11 +182,12 @@ describe("Intelligent PDF Dark Mode Classifier", () => {
   });
 
   it("resolves global modes (light theme, original, smart, force) and per-page overrides accurately", () => {
-    const coverRgba = makePageBuffer(64, 80, () => [32, 95, 195]);
+    const coverRgba = makePageBuffer(64, 80, () => [220, 145, 70]);
     const coverAnalysis = classifyPagePixels(coverRgba, 64, 80, {
       pageNumber: 1,
       textLength: 20,
     });
+    expect(coverAnalysis.classification).toBe("cover-or-artwork");
 
     // Light app theme -> never alters PDF page
     const inLightApp = resolvePdfPageAppearance({
