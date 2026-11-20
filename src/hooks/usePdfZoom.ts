@@ -24,7 +24,7 @@ export function usePdfZoom({
     isRestoringPageRef,
 }: UsePdfZoomOptions) {
     const [zoomLevel, setZoomLevel] = useState<number>(initialZoom);
-    const [renderZoom] = useDebounce(zoomLevel, 140);
+    const [renderZoom] = useDebounce(zoomLevel, 240);
     const [isCtrlHeld, setIsCtrlHeld] = useState(false);
     const prevZoomRef = useRef(initialZoom);
 

@@ -58,6 +58,9 @@ export function ViewerView() {
   const shortcutModifier = useSystemStore((s) => s.shortcutModifier);
   const sidebarOpen = useSystemStore((s) => s.sidebarOpen);
   const toggleSidebar = useSystemStore((s) => s.toggleSidebar);
+  const isDark = useSystemStore((s) => s.isDark);
+  const pdfDarkMode = useSystemStore((s) => s.pdfDarkMode);
+  const cyclePdfDarkMode = useSystemStore((s) => s.cyclePdfDarkMode);
   const isAiStudioOpen = useAiStudioStore((s) => s.isAiStudioOpen);
   const activeAiTab = useAiStudioStore((s) => s.activeAiTab);
   const isSummaryWorkspaceOpen = useSummaryStore(
@@ -303,6 +306,8 @@ export function ViewerView() {
         zoomLevel={zoomLevel}
         isSidebarOpen={sidebarOpen}
         isCurrentPageBookmarked={isBookmarked}
+        isDarkTheme={isDark}
+        pdfDarkMode={pdfDarkMode}
         shortcutModifier={shortcutModifier}
         onToggleSidebar={toggleSidebar}
         onJumpToPage={jumpToPage}
@@ -318,6 +323,7 @@ export function ViewerView() {
         onZoomChange={setZoomLevel}
         onResetZoom={resetZoom}
         onFitToWidth={handleFitToWidth}
+        onCyclePdfDarkMode={cyclePdfDarkMode}
         onToggleBookmark={() =>
           useAnnotationStore.getState().toggleBookmark(currentPage)
         }

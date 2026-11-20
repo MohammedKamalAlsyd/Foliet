@@ -369,6 +369,7 @@ export function resetAllTestState(): void {
   useSystemStore.setState({
     platform: "windows",
     theme: "dark",
+    pdfDarkMode: "smart",
     defaultZoom: 100,
     sidebarOpen: false,
     isMac: false,

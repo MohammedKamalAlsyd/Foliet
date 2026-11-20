@@ -1,6 +1,14 @@
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { Page } from "react-pdf";
-import { Sparkles, X } from "lucide-react";
+import { Eye, MoonStar, RotateCcw, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SelectionActionBar } from "@/components/viewer/SelectionActionBar";
 import { CropAndNoteLayer } from "@/components/viewer/layers/CropAndNoteLayer";
@@ -10,6 +18,7 @@ import { getToolCursor } from "@/constants/toolCursors";
 import { usePagePointerTools } from "@/hooks/usePagePointerTools";
 import { useRagStore } from "@/stores/ragStore";
 import { useSummaryStore } from "@/stores/summaryStore";
+import { useSystemStore } from "@/stores/systemStore";
 import {
   type CropAnnotation,
   type InkAnnotation,
@@ -21,6 +30,12 @@ import {
   isTextMarkupAnnotation,
 } from "@/types/annotations";
 import type { ToolType, UnderlineStyle } from "@/types/tools";
+import {
+  type PdfPageAppearanceAnalysis,
+  type PdfPageOverride,
+  analyzePdfCanvas,
+  resolvePdfPageAppearance,
+} from "@/utils/pdfDarkMode";
 
 interface PdfPageProps {
   pageNumber: number;
@@ -73,6 +88,35 @@ export const PdfPage = memo(function PdfPage({
     width: number;
     height: number;
   } | null>(null);
+  const [pageAnalysis, setPageAnalysis] =
+    useState<PdfPageAppearanceAnalysis | null>(null);
+  const [pageOverride, setPageOverride] = useState<PdfPageOverride>("auto");
+  const [settledRenderKey, setSettledRenderKey] = useState<string | null>(null);
+  const hasAnalyzedCanvasRef = useRef(false);
+  const hasAnalyzedTextRef = useRef(false);
+  const latestRenderKeyRef = useRef<string>("");
+
+  const isDark = useSystemStore((s) => s.isDark);
+  const pdfDarkMode = useSystemStore((s) => s.pdfDarkMode);
+
+  useEffect(() => {
+    setPageAnalysis(null);
+    setPageOverride("auto");
+    setSettledRenderKey(null);
+    hasAnalyzedCanvasRef.current = false;
+    hasAnalyzedTextRef.current = false;
+  }, [pageNumber]);
+
+  const resolvedAppearance = useMemo(
+    () =>
+      resolvePdfPageAppearance({
+        isAppDark: isDark,
+        setting: pdfDarkMode,
+        override: pageOverride,
+        analysis: pageAnalysis,
+      }),
+    [isDark, pdfDarkMode, pageOverride, pageAnalysis],
+  );
 
   const activeRagHighlight = useRagStore((s) =>
     s.activeRagHighlight?.pageNumber === pageNumber
@@ -145,7 +189,8 @@ export const PdfPage = memo(function PdfPage({
     [pageNumber, onDimensionsDiscovered],
   );
 
-  // Snapshot rendered canvas into back-buffer so subsequent zoom re-renders never blink white
+  // Snapshot rendered canvas into back-buffer so subsequent zoom re-renders never blink,
+  // and analyze the raw un-filtered pixels once per page for intelligent dark-mode adaptation.
   const handlePageRenderSuccess = useCallback(() => {
     const wrapper = wrapperRef.current;
     const buf = bufferCanvasRef.current;
@@ -159,7 +204,48 @@ export const PdfPage = memo(function PdfPage({
     buf.height = pdfCanvas.height;
     const ctx = buf.getContext("2d");
     ctx?.drawImage(pdfCanvas, 0, 0);
-  }, []);
+
+    // Reveal the crisp newly-rendered canvas now that painting is 100% complete
+    setSettledRenderKey(latestRenderKeyRef.current);
+
+    if (!hasAnalyzedCanvasRef.current) {
+      hasAnalyzedCanvasRef.current = true;
+      const textLayerEl = wrapper.querySelector(".textLayer");
+      const textLength = textLayerEl
+        ? (textLayerEl.textContent?.trim().length ?? 0)
+        : undefined;
+      if (textLength !== undefined && textLength > 0) {
+        hasAnalyzedTextRef.current = true;
+      }
+      setPageAnalysis(analyzePdfCanvas(pdfCanvas, { pageNumber, textLength }));
+    }
+  }, [pageNumber]);
+
+  // Refine classification once when the text layer first finishes rendering
+  const handleTextLayerRenderSuccess = useCallback(() => {
+    if (hasAnalyzedTextRef.current) return;
+    const wrapper = wrapperRef.current;
+    const buf = bufferCanvasRef.current;
+    if (!wrapper || !buf || buf.width === 0 || buf.height === 0) return;
+    hasAnalyzedTextRef.current = true;
+    const textLayerEl = wrapper.querySelector(".textLayer");
+    const textLength = textLayerEl?.textContent?.trim().length ?? 0;
+    const nextAnalysis = analyzePdfCanvas(buf, { pageNumber, textLength });
+    setPageAnalysis((prev) =>
+      prev &&
+      prev.classification === nextAnalysis.classification &&
+      prev.smartFilter === nextAnalysis.smartFilter
+        ? prev
+        : nextAnalysis,
+    );
+  }, [pageNumber]);
+
+  const handleTogglePageOverride = useCallback(() => {
+    setPageOverride((prev) => {
+      if (prev !== "auto") return "auto";
+      return resolvedAppearance.isInverted ? "original" : "dark";
+    });
+  }, [resolvedAppearance.isInverted]);
 
   const needsDrawingLayer =
     activeTool === "freehand_write" ||
@@ -179,10 +265,40 @@ export const PdfPage = memo(function PdfPage({
   const renderScale = renderZoomLevel / 100;
   const cssScale = zoomLevel / renderZoomLevel;
 
+  const currentRenderKey = `${pageNumber}:${renderScale}:${dpr}`;
+  latestRenderKeyRef.current = currentRenderKey;
+  const isLiveCanvasSettled = settledRenderKey === currentRenderKey;
+
+  const pageContainerStyle = useMemo<CSSProperties>(() => {
+    const style: Record<string, string | number> = {
+      "--pdf-page-filter": resolvedAppearance.filter ?? "none",
+    };
+    if (cssScale !== 1) {
+      style.transform = `scale(${cssScale})`;
+      style.transformOrigin = "top left";
+      style.width = Math.round(baseWidth * renderScale);
+      style.height = Math.round(baseHeight * renderScale);
+    }
+    return style as CSSProperties;
+  }, [
+    resolvedAppearance.filter,
+    cssScale,
+    baseWidth,
+    baseHeight,
+    renderScale,
+  ]);
+
+  const showPageAppearanceControl =
+    isDark && pdfDarkMode !== "original" && !needsDrawingLayer && !isEraser;
+  const useDarkBackdrop =
+    isDark && (resolvedAppearance.isDarkSurface || pageAnalysis === null);
+
   return (
     <div
       ref={setRefs}
       data-foliet-page={pageNumber}
+      data-foliet-page-appearance={resolvedAppearance.classification}
+      data-foliet-page-dark={resolvedAppearance.isDarkSurface ? "true" : "false"}
       onMouseUp={handleMouseUp}
       style={{
         width: Math.round(baseWidth * scale),
@@ -190,7 +306,8 @@ export const PdfPage = memo(function PdfPage({
         cursor: toolCursor,
       }}
       className={cn(
-        "relative overflow-hidden rounded-sm border border-border bg-white shadow-[var(--shadow-sm)] [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
+        "group/page relative overflow-hidden rounded-sm border border-border shadow-[var(--shadow-sm)] [&_.annotationLayer>section:not(.linkAnnotation)]:!hidden",
+        useDarkBackdrop ? "bg-[#19191b]" : "bg-white",
         activeTool !== "select" &&
           "[&_.textLayer]:!cursor-[inherit] [&_.textLayer_*]:!cursor-[inherit]",
         isNonTextTool &&
@@ -203,22 +320,17 @@ export const PdfPage = memo(function PdfPage({
       <canvas
         ref={bufferCanvasRef}
         aria-hidden="true"
+        style={{ filter: resolvedAppearance.filter }}
         className="pointer-events-none absolute inset-0 z-0 h-full w-full"
       />
 
-      {/* Live PDF page; CSS-scaled immediately while zoom is changing, then re-rendered at settled DPI */}
+      {/* Live PDF page; CSS-scaled immediately while zoom is changing, hidden behind back-buffer while re-rendering at settled DPI */}
       <div
-        style={
-          cssScale !== 1
-            ? {
-                transform: `scale(${cssScale})`,
-                transformOrigin: "top left",
-                width: Math.round(baseWidth * renderScale),
-                height: Math.round(baseHeight * renderScale),
-              }
-            : undefined
-        }
-        className="relative z-[1] [&_.react-pdf__Page]:!bg-transparent"
+        style={pageContainerStyle}
+        className={cn(
+          "foliet-pdf-canvas-host relative z-[1] [&_.react-pdf__Page]:!bg-transparent",
+          !isLiveCanvasSettled && "foliet-canvas-pending",
+        )}
       >
         <Page
           pageNumber={pageNumber}
@@ -229,6 +341,7 @@ export const PdfPage = memo(function PdfPage({
           loading={null}
           onLoadSuccess={handlePageLoadSuccess}
           onRenderSuccess={handlePageRenderSuccess}
+          onRenderTextLayerSuccess={handleTextLayerRenderSuccess}
         />
       </div>
 
@@ -236,6 +349,7 @@ export const PdfPage = memo(function PdfPage({
         textMarkups={textMarkups}
         ragHighlight={activeRagHighlight}
         isDimensionsSettled={discoveredDim !== null}
+        isDarkPage={resolvedAppearance.isDarkSurface}
         isEraser={isEraser}
         onDeleteAnnotation={onDeleteAnnotation}
       />
@@ -272,6 +386,56 @@ export const PdfPage = memo(function PdfPage({
         onNoteClick={onNoteClick}
         onDismissQuickInsert={dismissQuickInsert}
       />
+
+      {/* Subtle per-page dark-mode status & 1-click override pill (visible on page hover or when overridden) */}
+      {showPageAppearanceControl && (
+        <button
+          type="button"
+          onMouseDown={(e) => e.stopPropagation()}
+          onMouseUp={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleTogglePageOverride();
+          }}
+          aria-label={
+            resolvedAppearance.isOverridden
+              ? `Reset page ${pageNumber} to smart dark mode`
+              : resolvedAppearance.isInverted
+                ? `Show page ${pageNumber} in original colors`
+                : `Force dark mode on page ${pageNumber}`
+          }
+          title={
+            resolvedAppearance.isOverridden
+              ? `${resolvedAppearance.reasonLabel} — click to restore Smart Auto`
+              : resolvedAppearance.isInverted
+                ? `${resolvedAppearance.reasonLabel} — click to view this page in original colors`
+                : `${resolvedAppearance.reasonLabel} — click to force dark mode on this page`
+          }
+          className={cn(
+            "absolute top-2.5 right-2.5 z-30 flex items-center gap-1.5 rounded-full border border-border bg-card/90 px-2.5 py-1 text-[11px] font-medium text-muted-foreground shadow-sm backdrop-blur-md transition-all duration-150 select-none hover:border-foreground/20 hover:text-foreground",
+            resolvedAppearance.isOverridden
+              ? "opacity-85 hover:opacity-100"
+              : "opacity-0 group-hover/page:opacity-100 focus-visible:opacity-100",
+          )}
+        >
+          {resolvedAppearance.isOverridden ? (
+            <RotateCcw size={12} strokeWidth={1.75} className="text-[var(--accent-brand)]" />
+          ) : resolvedAppearance.isInverted ? (
+            <Eye size={12} strokeWidth={1.75} />
+          ) : (
+            <MoonStar size={12} strokeWidth={1.75} className="text-[var(--accent-brand)]" />
+          )}
+          <span>
+            {resolvedAppearance.isOverridden
+              ? "Reset"
+              : resolvedAppearance.isInverted
+                ? resolvedAppearance.classification === "scanned-paper"
+                  ? "Scanned · Original"
+                  : "Original"
+                : `${resolvedAppearance.reasonLabel} · Dark`}
+          </span>
+        </button>
+      )}
 
       {/* Visual RAG Highlight Match Banner (only for genuine RAG search results) */}
       {showRagMatchBanner && activeRagHighlight && (

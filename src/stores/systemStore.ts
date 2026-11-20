@@ -2,10 +2,12 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { PlatformService, type PlatformOS } from "@/services/platform";
 import { tauriSettingsStorage } from "@/services/storage/tauriStorage";
+import type { PdfDarkModeSetting } from "@/utils/pdfDarkMode";
 
 export interface SystemState {
     platform: PlatformOS;
     theme: "dark" | "light";
+    pdfDarkMode: PdfDarkModeSetting;
     defaultZoom: number;
     sidebarOpen: boolean;
     isMac: boolean;
@@ -17,6 +19,8 @@ export interface SystemState {
     initSystem: () => Promise<void>;
     setTheme: (theme: "dark" | "light") => void;
     toggleTheme: () => void;
+    setPdfDarkMode: (mode: PdfDarkModeSetting) => void;
+    cyclePdfDarkMode: () => void;
     setSidebarOpen: (open: boolean) => void;
     toggleSidebar: () => void;
     setDefaultZoom: (zoom: number) => void;
@@ -37,6 +41,7 @@ export const useSystemStore = create<SystemState>()(
         (set, get) => ({
             platform: "windows",
             theme: "dark",
+            pdfDarkMode: "smart",
             defaultZoom: 100,
             sidebarOpen: true,
             isMac: false,
@@ -80,6 +85,19 @@ export const useSystemStore = create<SystemState>()(
                 get().setTheme(next);
             },
 
+            setPdfDarkMode: (mode: PdfDarkModeSetting) => set({ pdfDarkMode: mode }),
+
+            cyclePdfDarkMode: () => {
+                const current = get().pdfDarkMode;
+                const next: PdfDarkModeSetting =
+                    current === "smart"
+                        ? "original"
+                        : current === "original"
+                          ? "force"
+                          : "smart";
+                set({ pdfDarkMode: next });
+            },
+
             setSidebarOpen: (open: boolean) => set({ sidebarOpen: open }),
 
             toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
@@ -91,6 +109,7 @@ export const useSystemStore = create<SystemState>()(
             storage: createJSONStorage(() => tauriSettingsStorage),
             partialize: (state) => ({
                 theme: state.theme,
+                pdfDarkMode: state.pdfDarkMode,
                 defaultZoom: state.defaultZoom,
                 sidebarOpen: state.sidebarOpen,
             }),

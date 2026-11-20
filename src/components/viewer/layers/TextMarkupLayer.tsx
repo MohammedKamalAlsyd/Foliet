@@ -8,6 +8,7 @@ interface TextMarkupLayerProps {
   textMarkups: TextMarkupAnnotation[];
   ragHighlight: RagSearchResult | null;
   isDimensionsSettled: boolean;
+  isDarkPage?: boolean;
   isEraser: boolean;
   onDeleteAnnotation: (id: string) => void;
 }
@@ -16,6 +17,7 @@ export const TextMarkupLayer = memo(function TextMarkupLayer({
   textMarkups,
   ragHighlight,
   isDimensionsSettled,
+  isDarkPage = false,
   isEraser,
   onDeleteAnnotation,
 }: TextMarkupLayerProps) {
@@ -102,7 +104,10 @@ export const TextMarkupLayer = memo(function TextMarkupLayer({
             key={annot.id}
             className={cn(
               "pointer-events-none absolute inset-0",
-              annot.toolType === "highlight" && "opacity-40 mix-blend-multiply",
+              annot.toolType === "highlight" &&
+                (isDarkPage
+                  ? "opacity-35 mix-blend-screen"
+                  : "opacity-40 mix-blend-multiply"),
             )}
           >
             {annot.rectSegments.map((seg, idx) => (

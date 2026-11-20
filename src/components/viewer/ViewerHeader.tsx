@@ -3,7 +3,10 @@ import {
   Bookmark,
   ChevronLeft,
   ChevronRight,
+  Contrast,
+  FileText,
   Maximize2,
+  MoonStar,
   PanelLeft,
   Search,
   ZoomIn,
@@ -19,6 +22,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import type { PdfDarkModeSetting } from "@/utils/pdfDarkMode";
 
 interface ViewerHeaderProps {
   currentPage: number;
@@ -27,6 +31,8 @@ interface ViewerHeaderProps {
   zoomLevel: number;
   isSidebarOpen: boolean;
   isCurrentPageBookmarked: boolean;
+  isDarkTheme: boolean;
+  pdfDarkMode: PdfDarkModeSetting;
   shortcutModifier: string;
   onToggleSidebar: () => void;
   onJumpToPage: (page: number) => void;
@@ -34,6 +40,7 @@ interface ViewerHeaderProps {
   onZoomChange: (zoom: number) => void;
   onResetZoom: () => void;
   onFitToWidth: () => void;
+  onCyclePdfDarkMode: () => void;
   onToggleBookmark: () => void;
   onOpenSearch: () => void;
 }
@@ -45,6 +52,8 @@ export function ViewerHeader({
   zoomLevel,
   isSidebarOpen,
   isCurrentPageBookmarked,
+  isDarkTheme,
+  pdfDarkMode,
   shortcutModifier,
   onToggleSidebar,
   onJumpToPage,
@@ -52,6 +61,7 @@ export function ViewerHeader({
   onZoomChange,
   onResetZoom,
   onFitToWidth,
+  onCyclePdfDarkMode,
   onToggleBookmark,
   onOpenSearch,
 }: ViewerHeaderProps) {
@@ -60,6 +70,33 @@ export function ViewerHeader({
   useEffect(() => {
     setPageDraft(currentLabel);
   }, [currentLabel]);
+
+  const pdfDarkModeMeta =
+    pdfDarkMode === "smart"
+      ? {
+          shortLabel: "Smart",
+          ariaLabel: "PDF dark pages: Smart mode (click to switch)",
+          tooltip:
+            "Dark Pages: Smart — darkens text, enhances scans, preserves covers & dark slides",
+          Icon: MoonStar,
+          isActive: true,
+        }
+      : pdfDarkMode === "force"
+        ? {
+            shortLabel: "Force",
+            ariaLabel: "PDF dark pages: Force dark on all pages (click to switch)",
+            tooltip: "Dark Pages: Force All — darkens every page including covers",
+            Icon: Contrast,
+            isActive: true,
+          }
+        : {
+            shortLabel: "Paper",
+            ariaLabel: "PDF dark pages: Original paper (click to switch)",
+            tooltip: "Dark Pages: Off — showing original PDF paper colors",
+            Icon: FileText,
+            isActive: false,
+          };
+  const PdfDarkModeIcon = pdfDarkModeMeta.Icon;
 
   return (
     <TooltipProvider>
@@ -221,8 +258,45 @@ export function ViewerHeader({
           </Tooltip>
         </div>
 
-        {/* Right: Search + Bookmark */}
+        {/* Right: PDF Dark Pages + Search + Bookmark */}
         <div className="flex items-center gap-1 justify-self-end">
+          {isDarkTheme && (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={onCyclePdfDarkMode}
+                    aria-label={pdfDarkModeMeta.ariaLabel}
+                    aria-pressed={pdfDarkModeMeta.isActive}
+                    className={cn(
+                      "h-9 gap-1.5 rounded-lg px-2.5 transition-colors duration-150 ease-[var(--ease-foliet)]",
+                      pdfDarkModeMeta.isActive
+                        ? "bg-accent/70 text-foreground hover:bg-accent"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  />
+                }
+              >
+                <PdfDarkModeIcon
+                  size={16}
+                  strokeWidth={1.5}
+                  className={cn(
+                    pdfDarkModeMeta.isActive && "text-[var(--accent-brand)]",
+                  )}
+                />
+                <span className="hidden text-[11px] font-medium sm:inline">
+                  {pdfDarkModeMeta.shortLabel}
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {pdfDarkModeMeta.tooltip}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           <Tooltip>
             <TooltipTrigger
               render={
