@@ -59,10 +59,13 @@ export function ViewerView() {
   const sidebarOpen = useSystemStore((s) => s.sidebarOpen);
   const toggleSidebar = useSystemStore((s) => s.toggleSidebar);
   const isAiStudioOpen = useAiStudioStore((s) => s.isAiStudioOpen);
+  const activeAiTab = useAiStudioStore((s) => s.activeAiTab);
   const isSummaryWorkspaceOpen = useSummaryStore(
     (s) => s.isSummaryWorkspaceOpen,
   );
   const isRightPanelOpen = isAiStudioOpen || isSummaryWorkspaceOpen;
+  const isWideSummaryPanel =
+    isSummaryWorkspaceOpen || (isAiStudioOpen && activeAiTab === "summary");
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const isRestoringPageRef = useRef(false);
@@ -492,11 +495,11 @@ export function ViewerView() {
           )}
           {isRightPanelOpen && (
             <ResizablePanel
-              key={isSummaryWorkspaceOpen ? "summary-split" : "ai-studio"}
-              id={isSummaryWorkspaceOpen ? "summary-split" : "ai-studio"}
-              defaultSize={isSummaryWorkspaceOpen ? "540px" : "360px"}
-              minSize={isSummaryWorkspaceOpen ? "380px" : "300px"}
-              maxSize={isSummaryWorkspaceOpen ? "920px" : "620px"}
+              key={isWideSummaryPanel ? "summary-split" : "ai-studio"}
+              id={isWideSummaryPanel ? "summary-split" : "ai-studio"}
+              defaultSize={isWideSummaryPanel ? "480px" : "360px"}
+              minSize={isWideSummaryPanel ? "340px" : "300px"}
+              maxSize={isWideSummaryPanel ? "880px" : "620px"}
             >
               <AiStudioSidebar
                 isOpen={isAiStudioOpen}

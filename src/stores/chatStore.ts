@@ -23,6 +23,7 @@ import {
     formatUserPromptWithSelection,
 } from "@/utils/llmFormatting";
 import { readAnyRenderedPagesContext } from "@/utils/pdfDom";
+import { compressChatHistory } from "@/utils/tokenCompressor";
 
 export interface ChatStore {
     conversations: ChatConversation[];
@@ -380,9 +381,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             const pendingVisionQueue: ToolVisionPayload[] = [];
             const historyBeforeAssistant =
                 convAfterUser?.messages ?? [...conv.messages, userMsg];
+            const compressedHistory = compressChatHistory(historyBeforeAssistant);
 
             await LlmService.streamChat({
-                messages: historyBeforeAssistant,
+                messages: compressedHistory,
                 systemPrompt: systemPrompt || undefined,
                 ...llmConfig,
                 webSearchEnabled: aiConfig.webSearchEnabled,

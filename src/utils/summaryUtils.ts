@@ -20,6 +20,10 @@ import type { PdfChapter } from "@/types/document";
 import { resolveCropUri } from "@/utils/llmFormatting";
 import { buildChapterSummaryPrompt } from "@/utils/llmPrompts";
 import { getPageRagChunks } from "@/utils/pdfDom";
+import {
+    type CompressionStats,
+    compressDocumentText,
+} from "@/utils/tokenCompressor";
 
 export interface AiSummaryState {
     content: string;
@@ -210,22 +214,57 @@ export function collectRangeContext(
     const chatTakeaways: SummaryChatTakeawayInput[] = options.includeChats
         ? conversations
             .filter((c) => c.messages.length > 0)
-            .slice(0, 6)
+            .slice(0, 4)
             .map((c) => ({
                 title: c.title,
                 excerpts: c.messages
                     .filter((m) => m.content.trim().length > 0)
-                    .slice(-6)
+                    .slice(-4)
                     .map(
                         (m) =>
-                            `${m.role === "user" ? "Question" : "Lio"}: ${m.content
+                            `${m.role === "user" ? "Q" : "A"}: ${m.content
+                                .replace(/\s+/g, " ")
                                 .trim()
-                                .slice(0, 600)}`,
+                                .slice(0, 260)}`,
                     ),
             }))
         : [];
 
     return { highlights, notes, crops, chatTakeaways };
+}
+
+export async function fetchCompressedRangeText(
+    docId: string,
+    pdfProxy: any | null,
+    startPage: number,
+    endPage: number,
+    options?: { maxChars?: number; stripReferences?: boolean },
+): Promise<{ text: string; stats: CompressionStats }> {
+    const rawLimit = Math.max(24_000, (options?.maxChars ?? 11_500) * 2);
+    const rangeChunks = await getPageRagChunks(docId, startPage, endPage);
+    const rawText =
+        rangeChunks.length > 0
+            ? rangeChunks
+                .map((c) => `[Page ${c.pageNumber}] ${c.text.trim()}`)
+                .join("\n\n")
+                .slice(0, rawLimit)
+            : await PdfService.extractPageRangeText(pdfProxy, startPage, endPage, rawLimit);
+
+    const compressed = compressDocumentText(rawText, {
+        maxChars: options?.maxChars ?? 11_500,
+        stripReferences: options?.stripReferences ?? true,
+    });
+    return {
+        text: compressed.text,
+        stats: {
+            originalChars: compressed.originalChars,
+            compressedChars: compressed.compressedChars,
+            savedChars: compressed.savedChars,
+            savedPercent: compressed.savedPercent,
+            estimatedOriginalTokens: compressed.estimatedOriginalTokens,
+            estimatedCompressedTokens: compressed.estimatedCompressedTokens,
+        },
+    };
 }
 
 export async function fetchRangeText(
@@ -234,14 +273,8 @@ export async function fetchRangeText(
     startPage: number,
     endPage: number,
 ): Promise<string> {
-    const rangeChunks = await getPageRagChunks(docId, startPage, endPage);
-    if (rangeChunks.length > 0) {
-        return rangeChunks
-            .map((c) => `[Page ${c.pageNumber}] ${c.text.trim()}`)
-            .join("\n\n")
-            .slice(0, 20_000);
-    }
-    return PdfService.extractPageRangeText(pdfProxy, startPage, endPage, 18_000);
+    const { text } = await fetchCompressedRangeText(docId, pdfProxy, startPage, endPage);
+    return text;
 }
 
 export async function prepareChapterPromptData(params: {
@@ -256,12 +289,13 @@ export async function prepareChapterPromptData(params: {
     includeChats: boolean;
     webSearchEnabled?: boolean;
 }) {
-    const chapterText = await fetchRangeText(
-        params.docId,
-        params.pdfProxy,
-        params.chapter.startPage,
-        params.chapter.endPage,
-    );
+    const { text: chapterText, stats: compressionStats } =
+        await fetchCompressedRangeText(
+            params.docId,
+            params.pdfProxy,
+            params.chapter.startPage,
+            params.chapter.endPage,
+        );
     const ctx = collectRangeContext(params.annotations, params.conversations, {
         startPage: params.chapter.startPage,
         endPage: params.chapter.endPage,
@@ -269,6 +303,9 @@ export async function prepareChapterPromptData(params: {
         includeChats: params.includeChats,
     });
     const { enrichedCrops, visionImages } = await resolveCropsForVision(ctx.crops);
+    const hasNotes = ctx.highlights.length > 0 || ctx.notes.length > 0;
+    const hasChats = ctx.chatTakeaways.length > 0;
+    const hasCrops = enrichedCrops.length > 0;
     const prompt = buildChapterSummaryPrompt({
         docTitle: params.docTitle,
         chapterTitle: params.chapter.title,
@@ -284,7 +321,14 @@ export async function prepareChapterPromptData(params: {
         includeChats: params.includeChats,
         webSearchEnabled: params.webSearchEnabled,
     });
-    return { prompt, visionImages };
+    return {
+        prompt,
+        visionImages,
+        hasNotes,
+        hasChats,
+        hasCrops,
+        compressionStats,
+    };
 }
 
 export function upsertChapterSection(

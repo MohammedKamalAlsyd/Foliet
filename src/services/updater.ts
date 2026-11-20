@@ -36,12 +36,15 @@ export async function checkForUpdates(
     if (silent) {
       return { update: null };
     }
-    const message =
+    const rawMessage =
       err instanceof Error
         ? err.message
         : typeof err === "string"
           ? err
           : "Unable to check for updates right now.";
+    const message = /valid release json/i.test(rawMessage)
+      ? "No published update manifest (latest.json) found on GitHub Releases yet. Publish a public GitHub release with latest.json to enable auto-updates."
+      : rawMessage;
     return { update: null, error: message };
   }
 }

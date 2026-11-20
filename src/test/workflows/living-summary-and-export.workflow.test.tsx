@@ -20,6 +20,11 @@ import {
 import type { CropAnnotation, PdfAnnotation } from "@/types/annotations";
 import type { DocumentItem, PdfChapter } from "@/types/document";
 import { upsertChapterSection } from "@/utils/summaryUtils";
+import {
+  compressChatHistory,
+  compressDocumentText,
+  compressRagPassages,
+} from "@/utils/tokenCompressor";
 
 const SUMMARY_DOC: DocumentItem = {
   id: "doc-summary-2page",
@@ -114,8 +119,8 @@ function setupSummaryContext() {
   useAiStudioStore.setState({ isAiStudioOpen: true, activeAiTab: "summary" });
 }
 
-describe("Living summary workspace, figure embedding, auto-save & export workflow", () => {
-  it("displays accurate source counts in AiStudioSidebar before opening Split View", async () => {
+describe("Summary studio, zero-highlight prompting, token compression, auto-save & export workflow", () => {
+  it("opens Summary Studio directly inside the Summarize tab with no intermediate launch gate and works seamlessly with 0 highlights", async () => {
     const user = userEvent.setup();
     setupSummaryContext();
     useChatStore.setState({
@@ -137,33 +142,92 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
       <AiStudioSidebar
         isOpen={true}
         onJumpToPage={vi.fn()}
-        annotations={SAMPLE_ANNOTATIONS}
+        annotations={[]}
       />,
     );
 
-    const expectRowCount = (label: string, expected: string) => {
-      const labelEl = screen.getByText(label);
-      const row = labelEl.parentElement!;
-      expect(row.textContent).toContain(expected);
-    };
-
-    expectRowCount("Highlights", "2");
-    expectRowCount("Underlines", "1");
-    expectRowCount("Notes", "1");
-    expectRowCount("Figure crops", "1");
-    expectRowCount("Saved conversations", "1");
-    expect(screen.getByText("No saved summary yet")).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: /open summary split view/i }),
-    );
-    expect(useSummaryStore.getState().isSummaryWorkspaceOpen).toBe(true);
+    // Opens directly into Summary Studio without any "Open Summary Split View" gate
+    expect(await screen.findByLabelText("Summary Studio")).toBeInTheDocument();
     expect(
-      await screen.findByLabelText("Living Summary Split Pane"),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /open summary split view/i }),
+    ).not.toBeInTheDocument();
+
+    // Redundant "Full Book" button at the end of the composer must not exist
+    expect(
+      screen.queryByRole("button", { name: /^full book$/i }),
+    ).not.toBeInTheDocument();
+
+    // One-click starter prompt works with 0 highlights & sends compressed PDF text (no "missing highlights" noise)
+    mockLlm.enqueueResponse({
+      chunks: ["# Neural Retrieval Paper\n\n## Key Takeaways\n\nDirect PDF synthesis [Page 1]."],
+    });
+
+    await user.click(screen.getByRole("button", { name: "Key takeaways" }));
+
+    await waitFor(() => {
+      expect(useSummaryStore.getState().activeSummary?.content).toContain(
+        "Direct PDF synthesis [Page 1].",
+      );
+    });
+
+    const lastCall = mockLlm.calls[mockLlm.calls.length - 1];
+    expect(lastCall).toBeDefined();
+    expect(lastCall.systemPrompt).toContain("without mentioning missing highlights");
+    expect(lastCall.messages[0].content).toContain("SOURCE TEXT");
+    expect(lastCall.messages[0].content).not.toContain(
+      "No text highlights or underlines selected",
+    );
   });
 
-  it("generates chapter & full-book summaries (upsertChapterSection), refines conversationally, and restores previous snapshot", async () => {
+  it("compresses PDF headers/footers, hyphenated wraps, trailing references, RAG overlap, and old chat turns to reduce tokens", () => {
+    const noisyPdf = [
+      "[Page 1]\nJournal of Neural Systems Vol. 14\n1\nDense seman-\ntic retrieval achieves 94% recall on academic benchmarks.\nCopyright 2026 Neural Systems",
+      "[Page 2]\nJournal of Neural Systems Vol. 14\n2\nOverlapping 32-line windows preserve mathematical formu-\nlas and normalized bounding boxes.\nCopyright 2026 Neural Systems",
+      "[Page 3]\nJournal of Neural Systems Vol. 14\n3\nOur evaluations confirm 14 ms local query latency in Rust.\n\nReferences\n[1] Author A. Long citation entry repeated many times. 2024.\n[2] Author B. Another long bibliography item that wastes tokens. 2025.\n[3] Author C. Third bibliography entry with DOI and publisher metadata. 2025.\nCopyright 2026 Neural Systems",
+    ].join("\n\n");
+
+    const compressed = compressDocumentText(noisyPdf, { maxChars: 2000 });
+    expect(compressed.compressedChars).toBeLessThan(compressed.originalChars);
+    expect(compressed.savedPercent).toBeGreaterThan(20);
+    expect(compressed.text).toContain("[Page 1]");
+    expect(compressed.text).toContain("[Page 2]");
+    expect(compressed.text).toContain("semantic retrieval");
+    expect(compressed.text).toContain("formulas");
+    expect(compressed.text).not.toContain("Journal of Neural Systems Vol. 14");
+    expect(compressed.text).not.toContain("Copyright 2026 Neural Systems");
+    expect(compressed.text).toContain("[References omitted]");
+    expect(compressed.text).not.toContain("Another long bibliography item");
+
+    const dedupedRag = compressRagPassages([
+      {
+        pageNumber: 1,
+        text: "Shared overlapping line between chunk one and two.\nUnique line from chunk one.",
+      },
+      {
+        pageNumber: 1,
+        text: "Shared overlapping line between chunk one and two.\nUnique line from chunk two.",
+      },
+    ]);
+    expect(
+      dedupedRag.split("Shared overlapping line between chunk one and two.").length - 1,
+    ).toBe(1);
+    expect(dedupedRag).toContain("Unique line from chunk two.");
+
+    const longHistory = Array.from({ length: 10 }, (_, idx) => ({
+      id: `m-${idx}`,
+      role: (idx % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: `Turn ${idx}: ` + "x".repeat(500),
+      timestamp: idx * 1000,
+    }));
+    const compactHistory = compressChatHistory(longHistory, {
+      maxRecentMessages: 4,
+      maxOldChars: 100,
+    });
+    expect(compactHistory[0].content.length).toBeLessThanOrEqual(101);
+    expect(compactHistory[compactHistory.length - 1].content.length).toBeGreaterThan(400);
+  });
+
+  it("generates chapter & document summaries (upsertChapterSection), refines conversationally, and restores previous snapshot", async () => {
     // Pure upsertChapterSection verification
     const initial = upsertChapterSection(
       "",
@@ -187,7 +251,6 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
     const user = userEvent.setup();
     setupSummaryContext();
     useSummaryStore.setState({
-      isSummaryWorkspaceOpen: true,
       selectedChapterId: "ch-1",
     });
 
@@ -199,8 +262,8 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
       />,
     );
 
-    // Wait for lazy SummarizationWorkspace + Tiptap editor
-    await screen.findByLabelText("Living Summary Split Pane");
+    // Wait for lazy SummarizationWorkspace + Tiptap editor directly inside Summarize tab
+    await screen.findByLabelText("Summary Studio");
     await waitFor(() => {
       expect(document.querySelector(".ProseMirror")).not.toBeNull();
     });
@@ -210,7 +273,7 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
       chunks: ["## Introduction\n\nDense retrieval overview [Page 1]."],
     });
     await user.click(
-      screen.getByRole("button", { name: /generate chapter/i }),
+      screen.getByRole("button", { name: /summarize chapter/i }),
     );
 
     await waitFor(() => {
@@ -221,7 +284,7 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
     const savedCh1 = await mockDatabase.getSummary(SUMMARY_DOC.id);
     expect(savedCh1?.content).toContain("## Introduction");
 
-    // 2. Generate Full Book across both chapters (Page 1 & Page 2)
+    // 2. Switch scope selector to Entire Document and summarize across both chapters
     mockLlm.enqueueResponse({
       chunks: ["## Introduction\n\nFull book Ch 1 summary [Page 1]."],
     });
@@ -231,7 +294,11 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
       ],
     });
 
-    await user.click(screen.getByRole("button", { name: "Full Book" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Target chapter" }),
+      "all",
+    );
+    await user.click(screen.getByRole("button", { name: /^summarize$/i }));
 
     await waitFor(() => {
       const content = useSummaryStore.getState().activeSummary?.content ?? "";
@@ -488,7 +555,7 @@ describe("Living summary workspace, figure embedding, auto-save & export workflo
     );
 
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Close split summary" }));
+      fireEvent.click(screen.getByRole("button", { name: "Close AI Studio" }));
       await Promise.resolve();
       await Promise.resolve();
     });

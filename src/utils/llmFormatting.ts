@@ -11,6 +11,7 @@ import type {
 } from "@/services/llm/types";
 import type { CitationReference } from "@/types/chat";
 import { extractErrorMessage, isAbortError } from "@/utils/error";
+import { compressRagPassages } from "@/utils/tokenCompressor";
 
 export function splitDataUrl(
     dataUrl: string,
@@ -56,92 +57,64 @@ export function formatRagPassages(
     chunks: RagPromptContextItem[],
     defaultDocTitle?: string,
 ): string {
-    if (chunks.length === 0) return "(No relevant passages retrieved.)";
-    return chunks
-        .map((chunk, index) => {
-            const title = chunk.docTitle || defaultDocTitle || "Current Document";
-            return `--- PASSAGE ${index + 1} [Source: "${title}", Page ${chunk.pageNumber}] ---\n${chunk.text.trim()}`;
-        })
-        .join("\n\n");
+    return compressRagPassages(chunks, defaultDocTitle);
 }
 
-export function formatSummaryContextBlocks(
-    input: {
-        highlights: SummaryHighlightInput[];
-        notes: SummaryNoteInput[];
-        crops: SummaryCropInput[];
-        chatTakeaways: SummaryChatTakeawayInput[];
-    },
-    options?: { structuredPlaceholders?: boolean },
-): string {
-    const structured = Boolean(options?.structuredPlaceholders);
-    const orEmpty = (text: string, placeholder: string) =>
-        text || (structured ? placeholder : "");
+/**
+ * Formats non-empty optional user context (highlights, notes, crops, chat takeaways)
+ * in a compact, deduplicated format. Empty sections are always omitted so the model
+ * never complains about missing highlights or notes.
+ */
+export function formatSummaryContextBlocks(input: {
+    highlights: SummaryHighlightInput[];
+    notes: SummaryNoteInput[];
+    crops: SummaryCropInput[];
+    chatTakeaways: SummaryChatTakeawayInput[];
+}): string {
+    // Deduplicate highlights with identical normalized text
+    const seenHighlights = new Set<string>();
+    const uniqueHighlights = input.highlights.filter((h) => {
+        const key = h.text.replace(/\s+/g, " ").trim().toLowerCase();
+        if (!key || seenHighlights.has(key)) return false;
+        seenHighlights.add(key);
+        return true;
+    });
 
-    const highlightsText = orEmpty(
-        input.highlights
-            .map((h, i) => `${i + 1}. [Page ${h.pageNumber} · ${h.toolType}] "${h.text.trim()}"`)
-            .join("\n"),
-        "(No text highlights or underlines selected.)",
-    );
+    const highlightsText = uniqueHighlights
+        .map((h) => `- [Page ${h.pageNumber}] "${h.text.replace(/\s+/g, " ").trim()}"`)
+        .join("\n");
 
-    const notesText = orEmpty(
-        input.notes
-            .map((n, i) => {
-                const ctx = n.contextSnippet ? ` (Context: "${n.contextSnippet.trim()}")` : "";
-                const prefix = structured ? " · User Note" : "";
-                return `${i + 1}. [Page ${n.pageNumber}${prefix}] ${n.comment.trim()}${ctx}`;
-            })
-            .join("\n"),
-        "(No personal sticky notes selected.)",
-    );
+    const notesText = input.notes
+        .map((n) => {
+            const ctx = n.contextSnippet
+                ? ` (re: "${n.contextSnippet.replace(/\s+/g, " ").trim().slice(0, 140)}")`
+                : "";
+            return `- [Page ${n.pageNumber}] ${n.comment.replace(/\s+/g, " ").trim()}${ctx}`;
+        })
+        .join("\n");
 
-    const cropsText = orEmpty(
-        input.crops
-            .map((c, i) => {
-                const prefix = structured ? " · Figure Crop" : "";
-                const caption = c.caption ? ` | Caption: "${c.caption.trim()}"` : "";
-                const visionNote = c.resolvedDataUrl
-                    ? structured
-                        ? " | (Visual image attached for inspection)"
-                        : " | (Visual image attached)"
-                    : "";
-                return `${i + 1}. [Page ${c.pageNumber}${prefix}] URI: ${c.imageUrl}${caption}${visionNote}`;
-            })
-            .join("\n"),
-        "(No figure crops selected.)",
-    );
+    const cropsText = input.crops
+        .map((c) => {
+            const cap = c.caption ? ` | "${c.caption.trim()}"` : "";
+            const vis = c.resolvedDataUrl ? " | image attached" : "";
+            return `- [Page ${c.pageNumber}] ${c.imageUrl}${cap}${vis}`;
+        })
+        .join("\n");
 
-    const chatsText = orEmpty(
-        input.chatTakeaways
-            .map(
-                (c, i) =>
-                    `Conversation ${i + 1}: "${c.title}"\n${c.excerpts
-                        .map((e) => `  - ${e.trim()}`)
-                        .join("\n")}`,
-            )
-            .join(structured ? "\n\n" : "\n"),
-        "(No Lio chat takeaways selected.)",
-    );
+    const chatsText = input.chatTakeaways
+        .map(
+            (c) =>
+                `- ${c.title}: ${c.excerpts
+                    .map((e) => e.replace(/\s+/g, " ").trim().slice(0, 260))
+                    .join(" | ")}`,
+        )
+        .join("\n");
 
     const sections: Array<[string, string]> = [
-        [
-            structured
-                ? "USER HIGHLIGHTED & UNDERLINED PASSAGES:"
-                : "USER HIGHLIGHTS & UNDERLINES:",
-            highlightsText,
-        ],
-        [
-            structured ? "USER PERSONAL STICKY NOTES:" : "USER STICKY NOTES:",
-            notesText,
-        ],
-        [
-            structured
-                ? "USER CAPTURED FIGURE CROPS:"
-                : "AVAILABLE FIGURE CROPS IN RANGE:",
-            cropsText,
-        ],
-        ["SAVED LIO CHAT TAKEAWAYS:", chatsText],
+        ["OPTIONAL USER HIGHLIGHTS:", highlightsText],
+        ["OPTIONAL USER NOTES:", notesText],
+        ["FIGURES:", cropsText],
+        ["OPTIONAL CHAT TAKEAWAYS:", chatsText],
     ];
 
     return sections

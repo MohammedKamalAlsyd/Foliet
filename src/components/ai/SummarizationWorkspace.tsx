@@ -20,7 +20,6 @@ import React, {
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import {
-  BookOpen,
   Check,
   Copy,
   Download,
@@ -46,7 +45,12 @@ import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useDocumentStore } from "@/stores/documentStore";
 import { useSummaryStore } from "@/stores/summaryStore";
-import { isCropAnnotation, type PdfAnnotation } from "@/types/annotations";
+import {
+  isCropAnnotation,
+  isNoteAnnotation,
+  isTextMarkupAnnotation,
+  type PdfAnnotation,
+} from "@/types/annotations";
 import { resolveCropUri } from "@/utils/llmFormatting";
 import { cn } from "@/lib/utils";
 
@@ -57,17 +61,37 @@ const LazySummaryDocsEditor = React.lazy(() =>
 );
 
 interface SummarizationWorkspaceProps {
+  embedded?: boolean;
   annotations?: PdfAnnotation[];
   onJumpToPage?: (page: number) => void;
 }
 
 const STYLE_PRESETS: Array<{ value: SummaryFocusMode; label: string }> = [
-  { value: "study", label: "Study Notes" },
-  { value: "executive", label: "Executive Brief" },
-  { value: "technical", label: "Technical & Code" },
+  { value: "study", label: "Study" },
+  { value: "executive", label: "Brief" },
+  { value: "technical", label: "Technical" },
+];
+
+const QUICK_SUMMARY_PROMPTS: Array<{ label: string; prompt: string }> = [
+  {
+    label: "Key takeaways",
+    prompt:
+      "Summarize the core thesis, main findings, and key takeaways concisely with page citations.",
+  },
+  {
+    label: "Section breakdown",
+    prompt:
+      "Create a structured section-by-section summary covering every major argument and result.",
+  },
+  {
+    label: "Methods & equations",
+    prompt:
+      "Summarize the methodology, architecture, key equations/algorithms, and empirical results.",
+  },
 ];
 
 export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
+  embedded = false,
   annotations: liveAnnotations,
   onJumpToPage,
 }) => {
@@ -87,6 +111,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     selectedChapterId,
     setSelectedChapterId,
     generationProgress,
+    lastCompressionStats,
     updateActiveSummaryLocal,
     loadSummary,
     restorePreviousSummary,
@@ -108,6 +133,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       selectedChapterId: s.selectedChapterId,
       setSelectedChapterId: s.setSelectedChapterId,
       generationProgress: s.generationProgress,
+      lastCompressionStats: s.lastCompressionStats,
       updateActiveSummaryLocal: s.updateActiveSummaryLocal,
       loadSummary: s.loadSummary,
       restorePreviousSummary: s.restorePreviousSummary,
@@ -163,9 +189,11 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     [chapters, selectedChapterId],
   );
 
+  const isWorkspaceActive = embedded || isSummaryWorkspaceOpen;
+
   // Load summary, conversations, and fallback annotations when workspace opens
   useEffect(() => {
-    if (!isSummaryWorkspaceOpen || !docId) return;
+    if (!isWorkspaceActive || !docId) return;
     pendingSaveMarkdownRef.current = null;
     loadSummary(docId);
     loadConversations(docId);
@@ -175,7 +203,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         .catch(() => setFallbackAnnotations([]));
     }
   }, [
-    isSummaryWorkspaceOpen,
+    isWorkspaceActive,
     docId,
     liveAnnotations,
     loadSummary,
@@ -302,10 +330,10 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     };
   }, [docId]);
 
-  // Flush pending edits only on unmount or docId change
+  // Flush pending edits on explicit close event, unmount, or docId change
   useEffect(() => {
     const currentDocId = docId;
-    return () => {
+    const flushNow = () => {
       if (autoSaveTimerRef.current) {
         clearTimeout(autoSaveTimerRef.current);
         autoSaveTimerRef.current = null;
@@ -319,6 +347,11 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
           sourceSnapshotRef.current,
         ).catch(() => {});
       }
+    };
+    window.addEventListener("foliet:flush-summary", flushNow);
+    return () => {
+      window.removeEventListener("foliet:flush-summary", flushNow);
+      flushNow();
     };
   }, [docId]);
 
@@ -404,16 +437,18 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     }
   };
 
-  const handleSubmitInstruction = async () => {
+  const handleSubmitInstruction = async (overrideInstruction?: string) => {
     if (!docId) return;
-    const trimmed = instruction.trim();
+    const trimmed = (overrideInstruction ?? instruction).trim();
     if (!trimmed) {
       await handleGenerate("auto");
       return;
     }
 
     const currentMd = editorRef.current?.getMarkdown() ?? draftMarkdown;
-    setInstruction("");
+    if (!overrideInstruction) {
+      setInstruction("");
+    }
     try {
       await modifySummaryWithInstruction(docId, {
         docTitle,
@@ -430,7 +465,9 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
       pendingSaveMarkdownRef.current = null;
       setSaveStatus("saved");
     } catch (err: any) {
-      setInstruction(trimmed);
+      if (!overrideInstruction) {
+        setInstruction(trimmed);
+      }
       toast.error(err?.message || "Failed to apply summary instruction");
     }
   };
@@ -501,7 +538,25 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     }
   };
 
-  if (!isSummaryWorkspaceOpen || !activeDoc) return null;
+  const notesAndHighlightsCount = useMemo(
+    () =>
+      sourceAnnotations.reduce(
+        (count, a) =>
+          count + (isTextMarkupAnnotation(a) || isNoteAnnotation(a) ? 1 : 0),
+        0,
+      ),
+    [sourceAnnotations],
+  );
+  const savedChatsCount = useMemo(
+    () =>
+      conversations.reduce(
+        (count, c) => count + (c.messages.length > 0 ? 1 : 0),
+        0,
+      ),
+    [conversations],
+  );
+
+  if (!isWorkspaceActive || !activeDoc) return null;
 
   const mascotState: MascotState = isSummarizing
     ? draftMarkdown.length > 0
@@ -525,26 +580,39 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
     previousSummary?.content?.trim() &&
     previousSummary.content !== draftMarkdown,
   );
+  const hasDraft = draftMarkdown.trim().length > 0;
 
   return (
     <aside
-      aria-label="Living Summary Split Pane"
+      aria-label="Summary Studio"
       className="flex h-full w-full flex-col bg-card"
     >
-      {/* Top Header: Title, Chapter Selector + Jump, Status, Exports, Close Split */}
-      <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/30 px-3">
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Compact Header: Scope Selector, Jump Menu, Status & Exports */}
+      <header className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-border bg-muted/20 px-3">
+        <div className="flex min-w-0 items-center gap-1.5">
           <AiMascot size={18} state={mascotState} className="shrink-0" />
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <h2 className="truncate text-xs font-medium text-foreground max-w-[140px]">
-                {docTitle}
-              </h2>
-              <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
-                {statusLabel}
-              </span>
-            </div>
-          </div>
+
+          {/* Chapter / Document Scope Selector */}
+          <select
+            aria-label="Target chapter"
+            value={selectedChapterId}
+            disabled={isSummarizing}
+            onChange={(e) => setSelectedChapterId(e.target.value)}
+            className="h-7 max-w-[160px] truncate rounded-md border border-border bg-background px-2 text-[11px] font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-brand)]"
+          >
+            <option value="all">
+              Entire Document{chapters.length > 1 ? ` (${chapters.length})` : ""}
+            </option>
+            {chapters.map((ch) => (
+              <option key={ch.id} value={ch.id}>
+                {ch.title} (p.{ch.startPage}–{ch.endPage})
+              </option>
+            ))}
+          </select>
+
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground">
+            {statusLabel}
+          </span>
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -561,22 +629,6 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
               <span>Restore</span>
             </Button>
           )}
-
-          {/* Chapter Selector */}
-          <select
-            aria-label="Target chapter"
-            value={selectedChapterId}
-            disabled={isSummarizing}
-            onChange={(e) => setSelectedChapterId(e.target.value)}
-            className="h-7 max-w-[130px] truncate rounded-md border border-border bg-background px-2 text-[11px] font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-brand)]"
-          >
-            <option value="all">Full Book ({chapters.length})</option>
-            {chapters.map((ch) => (
-              <option key={ch.id} value={ch.id}>
-                {ch.title} (p.{ch.startPage}–{ch.endPage})
-              </option>
-            ))}
-          </select>
 
           {/* Lightweight Chapter Jump Menu */}
           <div ref={jumpMenuRef} className="relative">
@@ -597,7 +649,7 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
 
             {jumpMenuOpen && (
               <div className="absolute right-0 top-8 z-50 w-64 max-h-72 overflow-y-auto rounded-xl border border-border bg-card p-1.5 shadow-lg">
-                <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                <div className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
                   Jump to chapter
                 </div>
                 {chapters.length === 0 ? (
@@ -671,17 +723,19 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
             <span>.docx</span>
           </Button>
 
-          <Button
-            type="button"
-            size="icon"
-            variant="ghost"
-            title="Close split summary"
-            aria-label="Close split summary"
-            onClick={handleClose}
-            className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <X size={15} strokeWidth={1.5} />
-          </Button>
+          {!embedded && (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              title="Close summary"
+              aria-label="Close summary"
+              onClick={handleClose}
+              className="h-7 w-7 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <X size={15} strokeWidth={1.5} />
+            </Button>
+          )}
         </div>
       </header>
 
@@ -705,96 +759,26 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
         </Suspense>
       </main>
 
-      {/* Compact Bottom Control Dock */}
-      <footer className="shrink-0 border-t border-border bg-card px-3 py-2.5 space-y-2">
-        {/* Row 1: System-Prompt Style Presets & Context Toggles */}
-        <div className="flex flex-wrap items-center justify-between gap-1.5">
-          {/* Style Mode Presets */}
-          <div
-            role="group"
-            aria-label="Summary style preset"
-            className="inline-flex items-center rounded-lg border border-border bg-muted/60 p-0.5"
-          >
-            {STYLE_PRESETS.map((preset) => {
-              const active = summaryFocusMode === preset.value;
-              return (
-                <button
-                  key={preset.value}
-                  type="button"
-                  disabled={isSummarizing}
-                  onClick={() => setSummaryFocusMode(preset.value)}
-                  className={cn(
-                    "rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
-                    active
-                      ? "bg-card text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  {preset.label}
-                </button>
-              );
-            })}
+      {/* Redesigned Unified Prompting Area */}
+      <footer className="shrink-0 border-t border-border bg-card/95 p-3 space-y-2">
+        {/* One-click starter prompts when summary is empty (works with 0 highlights) */}
+        {!hasDraft && !isSummarizing && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {QUICK_SUMMARY_PROMPTS.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => void handleSubmitInstruction(item.prompt)}
+                className="rounded-md border border-border bg-background px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-[var(--accent-brand)]/40 hover:text-foreground"
+              >
+                {item.label}
+              </button>
+            ))}
           </div>
+        )}
 
-          {/* Context Toggles */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              disabled={isSummarizing}
-              onClick={() => setIncludeNotes(!includeNotes)}
-              title="Automatically include sticky notes & highlights in chapter range"
-              className={cn(
-                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
-                includeNotes
-                  ? "border-[var(--accent-brand,#2563EB)]/40 bg-[var(--accent-brand,#2563EB)]/10 text-[var(--accent-brand,#2563EB)] font-medium"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <StickyNote size={11} strokeWidth={1.6} />
-              <span>Notes</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isSummarizing}
-              onClick={() => setIncludeChats(!includeChats)}
-              title="Include saved Lio chat takeaways"
-              className={cn(
-                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
-                includeChats
-                  ? "border-[var(--accent-brand,#2563EB)]/40 bg-[var(--accent-brand,#2563EB)]/10 text-[var(--accent-brand,#2563EB)] font-medium"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <MessageSquare size={11} strokeWidth={1.6} />
-              <span>Chats</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={isSummarizing || !isOpenRouter}
-              onClick={() => setSummaryWebSearch(!summaryWebSearch)}
-              title={
-                isOpenRouter
-                  ? "Enable OpenRouter live Web Search"
-                  : "Web Search requires OpenRouter provider"
-              }
-              className={cn(
-                "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] transition-colors",
-                !isOpenRouter && "opacity-45 cursor-not-allowed",
-                isOpenRouter && summaryWebSearch
-                  ? "border-[var(--accent-brand,#2563EB)]/40 bg-[var(--accent-brand,#2563EB)]/10 text-[var(--accent-brand,#2563EB)] font-medium"
-                  : "border-border bg-background text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Globe size={11} strokeWidth={1.6} />
-              <span>Web</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Row 2: Conversational Modification Composer + Generate / Stop */}
-        <div className="flex items-end gap-2">
+        {/* Unified Composer Box */}
+        <div className="rounded-xl border border-border bg-background transition-colors focus-within:border-[var(--accent-brand)]/60 focus-within:ring-1 focus-within:ring-[var(--accent-brand)]/20">
           <textarea
             rows={2}
             value={instruction}
@@ -805,69 +789,164 @@ export const SummarizationWorkspace: React.FC<SummarizationWorkspaceProps> = ({
                 e.preventDefault();
                 if (instruction.trim()) {
                   void handleSubmitInstruction();
+                } else {
+                  void handleGenerate("auto");
                 }
               }
             }}
             placeholder={
-              draftMarkdown.trim()
-                ? "Refine summary (e.g. 'Expand section 2 with equations on page 14')…"
-                : "Optional instruction, or click Generate to synthesize…"
+              hasDraft
+                ? "Refine summary (e.g. 'Add equations from page 4' or 'Make it shorter')…"
+                : "Describe what to focus on, or press Summarize…"
             }
-            className="min-h-[38px] max-h-24 flex-1 resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-[var(--accent-brand)]"
+            className="w-full min-h-[44px] max-h-28 resize-none bg-transparent px-3 pt-2.5 pb-1.5 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
 
-          <div className="flex shrink-0 items-center gap-1.5">
-            {isSummarizing ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="destructive"
-                onClick={cancelSummaryStreaming}
-                className="h-9 gap-1.5 rounded-lg px-3 text-xs"
+          {/* Compact Bottom Bar inside Composer */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Style Mode Segmented Control */}
+              <div
+                role="group"
+                aria-label="Summary style preset"
+                className="inline-flex items-center rounded-md border border-border/80 bg-muted/50 p-0.5"
               >
-                <Square size={12} fill="currentColor" />
-                <span>Stop</span>
-              </Button>
-            ) : instruction.trim() ? (
-              <Button
+                {STYLE_PRESETS.map((preset) => {
+                  const active = summaryFocusMode === preset.value;
+                  return (
+                    <button
+                      key={preset.value}
+                      type="button"
+                      disabled={isSummarizing}
+                      onClick={() => setSummaryFocusMode(preset.value)}
+                      className={cn(
+                        "rounded px-2 py-0.5 text-[11px] font-medium transition-colors",
+                        active
+                          ? "bg-card text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Optional Context Toggles */}
+              <button
                 type="button"
-                size="sm"
-                onClick={handleSubmitInstruction}
-                className="h-9 gap-1.5 rounded-lg bg-[var(--accent-brand)] px-3 text-xs text-[var(--accent-brand-fg)] hover:opacity-90"
-              >
-                <Send size={13} strokeWidth={1.6} />
-                <span>Apply</span>
-              </Button>
-            ) : (
-              <>
-                {selectedChapterId !== "all" && chapters.length > 1 && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleGenerate("full-book")}
-                    title="Generate all chapters sequentially"
-                    className="h-9 gap-1 rounded-lg px-2.5 text-xs"
-                  >
-                    <BookOpen size={13} strokeWidth={1.5} />
-                    <span>Full Book</span>
-                  </Button>
+                disabled={isSummarizing}
+                onClick={() => setIncludeNotes(!includeNotes)}
+                title={
+                  notesAndHighlightsCount > 0
+                    ? `Include ${notesAndHighlightsCount} highlight/note annotation(s)`
+                    : "Optional: include highlights & sticky notes when present"
+                }
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                  includeNotes
+                    ? "border-[var(--accent-brand)]/40 bg-[var(--accent-brand)]/10 font-medium text-[var(--accent-brand)]"
+                    : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
                 )}
+              >
+                <StickyNote size={11} strokeWidth={1.5} />
+                <span>
+                  Notes
+                  {notesAndHighlightsCount > 0
+                    ? ` (${notesAndHighlightsCount})`
+                    : ""}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isSummarizing}
+                onClick={() => setIncludeChats(!includeChats)}
+                title={
+                  savedChatsCount > 0
+                    ? `Include ${savedChatsCount} saved Lio chat(s)`
+                    : "Optional: include saved Lio chats when present"
+                }
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                  includeChats
+                    ? "border-[var(--accent-brand)]/40 bg-[var(--accent-brand)]/10 font-medium text-[var(--accent-brand)]"
+                    : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <MessageSquare size={11} strokeWidth={1.5} />
+                <span>
+                  Chats{savedChatsCount > 0 ? ` (${savedChatsCount})` : ""}
+                </span>
+              </button>
+
+              {isOpenRouter && (
+                <button
+                  type="button"
+                  disabled={isSummarizing}
+                  onClick={() => setSummaryWebSearch(!summaryWebSearch)}
+                  title="Enable OpenRouter live Web Search"
+                  className={cn(
+                    "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                    summaryWebSearch
+                      ? "border-[var(--accent-brand)]/40 bg-[var(--accent-brand)]/10 font-medium text-[var(--accent-brand)]"
+                      : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                >
+                  <Globe size={11} strokeWidth={1.5} />
+                  <span>Web</span>
+                </button>
+              )}
+
+              {lastCompressionStats && lastCompressionStats.savedPercent > 0 && (
+                <span
+                  title={`Prompt compressor reduced PDF context from ~${lastCompressionStats.estimatedOriginalTokens} to ~${lastCompressionStats.estimatedCompressedTokens} tokens`}
+                  className="hidden sm:inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-[var(--semantic-positive)]"
+                >
+                  -{lastCompressionStats.savedPercent}% tokens
+                </span>
+              )}
+            </div>
+
+            {/* Single Clean Primary Action Button */}
+            <div className="flex shrink-0 items-center">
+              {isSummarizing ? (
                 <Button
                   type="button"
                   size="sm"
-                  onClick={() => handleGenerate("auto")}
-                  className="h-9 gap-1.5 rounded-lg bg-[var(--accent-brand)] px-3 text-xs text-[var(--accent-brand-fg)] hover:opacity-90"
+                  variant="destructive"
+                  onClick={cancelSummaryStreaming}
+                  className="h-7 gap-1.5 rounded-md px-2.5 text-xs"
                 >
-                  <Sparkles size={13} strokeWidth={1.6} />
+                  <Square size={11} fill="currentColor" />
+                  <span>Stop</span>
+                </Button>
+              ) : instruction.trim() ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleSubmitInstruction()}
+                  className="h-7 gap-1.5 rounded-md bg-[var(--accent-brand)] px-3 text-xs text-[var(--accent-brand-fg)] hover:opacity-90"
+                >
+                  <Send size={12} strokeWidth={1.6} />
+                  <span>Apply</span>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void handleGenerate("auto")}
+                  className="h-7 gap-1.5 rounded-md bg-[var(--accent-brand)] px-3 text-xs text-[var(--accent-brand-fg)] hover:opacity-90"
+                >
+                  <Sparkles size={12} strokeWidth={1.6} />
                   <span>
                     {selectedChapterId === "all"
-                      ? "Generate Full Book"
-                      : "Generate Chapter"}
+                      ? "Summarize"
+                      : "Summarize Chapter"}
                   </span>
                 </Button>
-              </>
-            )}
+              )}
+            </div>
           </div>
         </div>
       </footer>

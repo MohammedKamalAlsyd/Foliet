@@ -446,6 +446,7 @@ export function resetAllTestState(): void {
     chapters: [],
     selectedChapterId: "all",
     generationProgress: null,
+    lastCompressionStats: null,
   });
 }
 

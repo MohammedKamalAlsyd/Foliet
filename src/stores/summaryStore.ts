@@ -13,6 +13,7 @@ import {
 } from "@/services/llm";
 import { DocumentDatabase } from "@/services/storage/database";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
+import { useDocumentStore } from "@/stores/documentStore";
 import type { PdfAnnotation } from "@/types/annotations";
 import type { ChatConversation } from "@/types/chat";
 import type { PdfChapter } from "@/types/document";
@@ -24,7 +25,7 @@ import {
 import {
     type AiSummaryState,
     collectRangeContext,
-    fetchRangeText,
+    fetchCompressedRangeText,
     prepareChapterPromptData,
     readPreviousSummaryBackup,
     resolveCropsForVision,
@@ -32,6 +33,7 @@ import {
     upsertChapterSection,
     writePreviousSummaryBackup,
 } from "@/utils/summaryUtils";
+import type { CompressionStats } from "@/utils/tokenCompressor";
 
 export type { AiSummaryState };
 
@@ -81,6 +83,7 @@ export interface SummaryStore {
     chapters: PdfChapter[];
     selectedChapterId: string;
     generationProgress: SummaryGenerationProgress | null;
+    lastCompressionStats: CompressionStats | null;
 
     setSummaryWorkspaceOpen: (open: boolean) => void;
     setSummaryFocusMode: (mode: SummaryFocusMode) => void;
@@ -222,6 +225,7 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
         chapters: [],
         selectedChapterId: "all",
         generationProgress: null,
+        lastCompressionStats: null,
 
         setSummaryWorkspaceOpen: (isSummaryWorkspaceOpen) =>
             set({ isSummaryWorkspaceOpen }),
@@ -365,7 +369,14 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                     set({
                         generationProgress: { current: 1, total: 1, chapterTitle: chapter.title },
                     });
-                    const { prompt, visionImages } = await prepareChapterPromptData({
+                    const {
+                        prompt,
+                        visionImages,
+                        hasNotes,
+                        hasChats,
+                        hasCrops,
+                        compressionStats,
+                    } = await prepareChapterPromptData({
                         docId,
                         docTitle,
                         chapter,
@@ -377,11 +388,15 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         includeChats,
                         webSearchEnabled: activeWebSearch,
                     });
+                    set({ lastCompressionStats: compressionStats });
                     await streamPrompt({
                         prompt,
                         systemPrompt: buildSummarySystemPrompt(summaryFocusMode, docTitle, {
                             includeNotes,
                             includeChats,
+                            hasNotes,
+                            hasChats,
+                            hasCrops,
                             webSearchEnabled: activeWebSearch,
                         }),
                         webSearchEnabled: activeWebSearch,
@@ -415,11 +430,6 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
             const { summaryFocusMode } = get();
             const llm = useAiConfigStore.getState().getActiveLlmConfig();
             const activeWebSearch = llm.provider === "openrouter" && webSearchEnabled;
-            const systemPrompt = buildSummarySystemPrompt(summaryFocusMode, docTitle, {
-                includeNotes,
-                includeChats,
-                webSearchEnabled: activeWebSearch,
-            });
             let runningMarkdown = `# ${docTitle}\n`;
 
             await runStreamedSummaryPipeline({
@@ -448,7 +458,14 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                                 chapterTitle: chapter.title,
                             },
                         });
-                        const { prompt, visionImages } = await prepareChapterPromptData({
+                        const {
+                            prompt,
+                            visionImages,
+                            hasNotes,
+                            hasChats,
+                            hasCrops,
+                            compressionStats,
+                        } = await prepareChapterPromptData({
                             docId,
                             docTitle,
                             chapter,
@@ -460,11 +477,19 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                             includeChats,
                             webSearchEnabled: activeWebSearch,
                         });
+                        set({ lastCompressionStats: compressionStats });
 
                         let chapterOutput = "";
                         await streamPrompt({
                             prompt,
-                            systemPrompt,
+                            systemPrompt: buildSummarySystemPrompt(summaryFocusMode, docTitle, {
+                                includeNotes,
+                                includeChats,
+                                hasNotes,
+                                hasChats,
+                                hasCrops,
+                                webSearchEnabled: activeWebSearch,
+                            }),
                             webSearchEnabled: activeWebSearch,
                             visionImages,
                             onChunk: (chunk) => {
@@ -537,17 +562,37 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                     const { enrichedCrops, visionImages } = await resolveCropsForVision(
                         ctx.crops,
                     );
-                    const chapterContext = activeChapter
+                    const currentChapters = get().chapters;
+                    const lastChapterEnd =
+                        currentChapters[currentChapters.length - 1]?.endPage;
+                    const totalPages =
+                        lastChapterEnd ??
+                        useDocumentStore.getState().activeDoc?.pages ??
+                        (Number(activePdfProxy?.numPages) || 15);
+                    const rangeStart = activeChapter?.startPage ?? 1;
+                    const rangeEnd = activeChapter?.endPage ?? Math.max(1, totalPages);
+                    const stripReferences = !/reference|bibliograph|works cited/i.test(
+                        instruction,
+                    );
+                    const { text: rangeText, stats: compressionStats } =
+                        await fetchCompressedRangeText(
+                            docId,
+                            activePdfProxy,
+                            rangeStart,
+                            rangeEnd,
+                            {
+                                maxChars: activeChapter ? 11_500 : 13_500,
+                                stripReferences,
+                            },
+                        );
+                    set({ lastCompressionStats: compressionStats });
+
+                    const chapterContext = rangeText.trim()
                         ? {
-                            title: activeChapter.title,
-                            startPage: activeChapter.startPage,
-                            endPage: activeChapter.endPage,
-                            text: await fetchRangeText(
-                                docId,
-                                activePdfProxy,
-                                activeChapter.startPage,
-                                activeChapter.endPage,
-                            ),
+                            title: activeChapter?.title ?? "Full Document",
+                            startPage: rangeStart,
+                            endPage: rangeEnd,
+                            text: rangeText,
                         }
                         : undefined;
 
@@ -569,6 +614,9 @@ export const useSummaryStore = create<SummaryStore>((set, get) => {
                         systemPrompt: buildSummarySystemPrompt(summaryFocusMode, docTitle, {
                             includeNotes,
                             includeChats,
+                            hasNotes: ctx.highlights.length > 0 || ctx.notes.length > 0,
+                            hasChats: ctx.chatTakeaways.length > 0,
+                            hasCrops: enrichedCrops.length > 0,
                             webSearchEnabled: activeWebSearch,
                         }),
                         webSearchEnabled: activeWebSearch,

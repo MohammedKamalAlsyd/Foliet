@@ -175,4 +175,5 @@ jobs:
           releaseBody: "See the assets below to download and install this version of Foliet."
           releaseDraft: true
           prerelease: false
+          uploadUpdaterJson: true
           args: ${{ matrix.args }}
