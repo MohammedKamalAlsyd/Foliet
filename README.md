@@ -16,6 +16,9 @@
   <a href="https://mohammedkamalalsyd.github.io/Foliet/">
     <img src="https://img.shields.io/badge/Website-Live_Preview-171717?style=for-the-badge" alt="Website" />
   </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-16A34A?style=for-the-badge" alt="MIT License" />
+  </a>
 </p>
 
 <p>
@@ -186,3 +189,10 @@ foliet/
         ├── pdf_reader.rs               # SHA-256 PDF ID hashing & embedded annotation extraction
         └── lib.rs                      # Tauri v2 setup, plugins, `foliet-pdf://` byte-range server, IPC commands
 ```
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE).
+

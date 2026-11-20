@@ -1,0 +1,54 @@
+# Foliet — Complete Technical & Product Reference for AI Agents
+
+## Overview
+- **Name:** Foliet
+- **Category:** Local-First Scholarly PDF Reader, ISO 32000-1 Annotation Studio, Offline Rust ONNX RAG Engine, and AI Research Workspace
+- **Platforms:** Windows 10/11 (x64 `.exe` NSIS & `.msi`), macOS 13.4+ (Apple Silicon `aarch64` `.dmg`), Linux x64 (Ubuntu 24.04+ `.AppImage` & `.deb`)
+- **Stack:** Tauri v2, Rust, React 19, TypeScript, Tailwind CSS v4, Base UI, PDF.js, `lopdf`, `ort` (ONNX Runtime), `tokenizers`, `rusqlite`, Tiptap + `lowlight`, Vercel AI SDK (`ai`)
+- **License & Cost:** Free, open-source, local-first (bring your own API key or use 100% free local Ollama + local Rust ONNX embeddings)
+- **Repository:** https://github.com/MohammedKamalAlsyd/Foliet
+- **Releases:** https://github.com/MohammedKamalAlsyd/Foliet/releases/latest
+- **Website:** https://mohammedkamalalsyd.github.io/Foliet/
+
+## Core Differentiators
+
+1. **Rust Byte-Range PDF Streaming (`foliet-pdf://`)**
+   - Serves local PDFs via asynchronous HTTP `206 Partial Content` byte-range responses from an 8-slot pooled Rust file cache.
+   - Avoids base64 IPC serialization bottlenecks when opening 500+ page textbooks and technical monographs.
+   - Paired with `@tanstack/react-virtual` windowed page rendering and a persistent back-buffer canvas for flicker-free zooming.
+
+2. **ISO 32000-1 Native PDF Annotation Burning (`lopdf`)**
+   - Complete annotation suite: Highlight, Underline (`solid`, `squiggle`, `dashed`), Strikethrough, Sticky Notes (300ms debounced floating portal), Freehand Ink (`perfect-freehand`), Eraser (click & drag), and high-DPI PNG Figure Area Crops.
+   - Pressing `Ctrl/Cmd + S` burns annotations directly into the PDF as standard ISO 32000-1 Form XObject appearance streams while stripping previous visual duplicates and preserving document trailer IDs.
+   - Full revision-tracked Undo/Redo history (`zundo`) and OS close-request protection when edits are unsaved.
+
+3. **In-Process Rust ONNX RAG & Cross-Library Vector Search**
+   - Extracts page text with normalized line bounding rectangles (`rects_json`) in Rust (`src-tauri/src/rag/pdf_text.rs`).
+   - Chunks documents with configurable line windows (default 32 lines, 6-line overlap) and embeds them locally in Rust using `ort` (ONNX Runtime) and `tokenizers`.
+   - Built-in downloadable local ONNX models:
+     - `abhinand/MedEmbed-small-v0.1` (384d, default, 0.853 benchmark score)
+     - `sentence-transformers/all-MiniLM-L12-v2` (384d)
+     - `avsolatorio/GIST-all-MiniLM-L6-v2` (384d)
+     - `Mihaiii/Ivysaur` (384d)
+     - `Mihaiii/gte-micro-v4` (384d)
+   - Also supports remote/local embedding providers: Voyage AI (`voyage-4-lite`, `voyage-4`, `voyage-4-large`), OpenAI (`text-embedding-3-small`, `text-embedding-3-large`), and Ollama (`qwen3-embedding:0.6b`, `qwen3-embedding:4b`, `bge-m3`, `embeddinggemma`).
+   - Clicking any RAG result jumps to the exact page (even across external PDFs in the library) and highlights the matched bounding boxes with an on-page `RAG Match (XX%)` spotlight banner.
+
+4. **Lio AI Research Companion & Agentic PDF Tools**
+   - Per-document persistent SQLite conversations (`foliet.db`) with clickable `[Page N]` citation chips.
+   - 4 built-in agentic PDF copilot tools executed live against the active document:
+     - `navigate_to(pageNumber, reason)`
+     - `highlight_passage(pageNumber, text, color, label)`
+     - `explain_figure(pageNumber, caption)`
+     - `add_figure_to_summary(pageNumber, caption)`
+   - Supported LLM providers: OpenRouter (with optional live web search), OpenAI, Anthropic, Google AI Studio, and local Ollama.
+
+5. **Split-Screen Living Summary Studio**
+   - Side-by-side Tiptap Markdown editor next to the live PDF viewer.
+   - Synthesizes chapter-by-chapter or full-book notes grounded in highlights, underlines, sticky notes, figure crops, and saved chats across 3 focus modes: `Study Notes`, `Executive Brief`, and `Technical & Code`.
+   - Drag-and-drop figure crops (`idb://` SQLite cache) or local images (up to 5 MB), conversational refinement, one-click snapshot rollback, and export to standalone `.md` or Microsoft Word `.docx`.
+
+6. **AES-256-GCM Encrypted Secrets & Signed Auto-Updates**
+   - API keys are never persisted in `localStorage`, `settings.json`, or SQLite.
+   - Rust `secrets.rs` encrypts all API keys into `secrets.enc` using AES-256-GCM with a fresh random 12-byte nonce per write and a 256-bit master key stored in the OS Credential Manager (`keyring`: Windows Credential Manager, macOS Keychain, Linux Secret Service).
+   - Signed in-app updates via `tauri-plugin-updater` with a dirty-document safety check before `relaunch()`.
