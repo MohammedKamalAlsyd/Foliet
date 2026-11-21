@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 import { Toaster, toast } from "sonner";
+import { invoke } from "@tauri-apps/api/core";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { Titlebar } from "@/components/Titlebar";
 import { ConfirmModal } from "@/components/modals/ConfirmModal";
@@ -17,6 +18,7 @@ import {
 import { WindowService } from "@/services/window";
 import { useAiConfigStore } from "@/stores/aiConfigStore";
 import { useDocumentStore } from "@/stores/documentStore";
+import { useLibraryStore } from "@/stores/libraryStore";
 import { useSystemStore } from "@/stores/systemStore";
 
 type PendingLeave = "home" | "close" | "update-install" | "update-relaunch" | null;
@@ -55,6 +57,17 @@ export function App() {
   // Hydrate encrypted API keys (and migrate/scrub any legacy plaintext entries) once at startup
   useEffect(() => {
     void useAiConfigStore.getState().hydrateSecrets();
+  }, []);
+
+  // Open a PDF passed via OS file association ("Open With") or CLI argument
+  useEffect(() => {
+    void invoke<string | null>("get_launch_pdf_path")
+      .then((launchPath) => {
+        if (launchPath && !useDocumentStore.getState().activeDoc) {
+          void useLibraryStore.getState().openPdfPath(launchPath);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   // Silent startup update check in standalone production builds only (disabled in Store MSIX builds)

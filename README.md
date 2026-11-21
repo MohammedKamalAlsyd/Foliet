@@ -56,7 +56,7 @@ Pre-built desktop installers with built-in automatic updates are published on [G
 ### OS Installation Notes
 
 - **Windows (SmartScreen Notice):**  
-  Direct GitHub downloads are currently not Authenticode-signed, so Windows Defender SmartScreen may display *"Windows protected your PC — Unknown publisher"* on first install. Click **More info → Run anyway** to proceed. Once installed, future updates run directly inside Foliet via Minisign verification without re-triggering browser SmartScreen warnings. *(Microsoft Store MSIX packaging is also included in this repository — see [Building for Microsoft Store (MSIX)](#building-for-microsoft-store-msix) below.)*
+  Direct GitHub downloads are currently not Authenticode-signed, so Windows Defender SmartScreen may display *"Windows protected your PC — Unknown publisher"* on first install. Click **More info → Run anyway** to proceed. Once installed, future updates run directly inside Foliet via Minisign verification without re-triggering browser SmartScreen warnings.
 - **macOS (Gatekeeper Notice):**  
   Open the `.dmg`, drag **Foliet** into **Applications**, and on first launch **Right-click (Control-click) → Open → Open** (or allow it under **System Settings → Privacy & Security → Open Anyway**). If macOS reports the unsigned binary as quarantined/damaged, clear the download quarantine attribute once in Terminal:
   ```bash
@@ -177,23 +177,6 @@ pnpm run version:bump 0.1.3             # Syncs package.json, src-tauri/tauri.co
 git commit -am "chore: release v0.1.3"
 git tag v0.1.3
 git push origin main --tags             # Triggers .github/workflows/release.yml
-```
-
-### Building for Microsoft Store (MSIX)
-Foliet includes an unsigned Windows x64 **MSIX** packaging pipeline for Microsoft Store submission (where Microsoft signs the package with its trusted Store certificate for zero SmartScreen warnings):
-
-1. Register a free ($0) individual developer account at [storedeveloper.microsoft.com](https://storedeveloper.microsoft.com), reserve **Foliet** in Partner Center, and copy your **Product Identity** fields (`Package/Identity/Name`, `Package/Identity/Publisher`, and `Package/Properties/PublisherDisplayName`).
-2. Add those 3 values as GitHub Actions **Secrets** or **Variables** in your repository (`MSIX_IDENTITY_NAME`, `MSIX_PUBLISHER`, `MSIX_PUBLISHER_DISPLAY_NAME`).
-3. On every release tag (or manual **Release Foliet** workflow run), GitHub Actions builds a Store-mode binary (`VITE_STORE_BUILD=true`, which disables external self-updates per Store policy) and uploads `windows-msix-store-package` (`foliet_<version>_x64.msix`) ready to submit in Partner Center.
-
-To build the `.msix` locally on Windows (requires Windows 10/11 SDK `MakeAppx.exe`):
-```powershell
-$env:VITE_STORE_BUILD = "true"
-$env:MSIX_IDENTITY_NAME = "YourPartnerCenter.IdentityName"
-$env:MSIX_PUBLISHER = "CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-$env:MSIX_PUBLISHER_DISPLAY_NAME = "Mohammed Kamal Alsyd"
-pnpm tauri build --no-bundle
-pnpm run msix:build
 ```
 
 ---

@@ -293,6 +293,8 @@ export const mockTauriInvoke = vi.fn(
           args.query,
           args.embeddingConfig,
         );
+      case "get_launch_pdf_path":
+        return null;
       case "export_pdf":
         return undefined;
       case "extract_pdf_annotations":

@@ -1,0 +1,141 @@
+name: Benchmark Foliet vs PDF Readers
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_windows:
+        description: "Run Windows benchmark (Foliet vs Edge, Chrome, SumatraPDF)"
+        type: boolean
+        default: true
+      run_linux:
+        description: "Run Linux benchmark (Foliet vs Okular, Evince, Chrome)"
+        type: boolean
+        default: true
+      pdf_sizes:
+        description: "Comma-separated synthetic PDF page counts (e.g. 10,100,500)"
+        type: string
+        default: "10,100,500"
+
+jobs:
+  benchmark-windows:
+    name: Windows Readers (Foliet vs Edge, Chrome, SumatraPDF)
+    if: ${{ inputs.run_windows == true || github.event_name != 'workflow_dispatch' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install SumatraPDF for comparison
+        shell: pwsh
+        run: choco install sumatrapdf.install -y --no-progress
+
+      - name: Build Foliet release binary (Windows x64)
+        run: pnpm tauri build --no-bundle
+
+      - name: Run Windows cross-reader & engine benchmarks
+        shell: pwsh
+        env:
+          PDF_SIZES: ${{ inputs.pdf_sizes || '10,100,500' }}
+        run: |
+          node scripts/benchmark-readers.mjs `
+            --sizes=$env:PDF_SIZES `
+            --settle-ms=3500 `
+            --out=benchmarks/results/windows
+
+      - name: Upload Windows benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-windows-report
+          path: benchmarks/results/windows/
+
+  benchmark-linux:
+    name: Linux Readers (Foliet vs Okular, Evince, Chrome)
+    if: ${{ inputs.run_linux == true || github.event_name != 'workflow_dispatch' }}
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install Tauri build deps, Okular, Firefox & Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xvfb \
+            okular \
+            evince
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Foliet release binary (Linux x64)
+        run: pnpm tauri build --no-bundle
+
+      - name: Run Linux cross-reader & engine benchmarks (under Xvfb)
+        env:
+          PDF_SIZES: ${{ inputs.pdf_sizes || '10,100,500' }}
+        run: |
+          xvfb-run -a -s "-screen 0 1440x900x24" \
+            node scripts/benchmark-readers.mjs \
+              --sizes="$PDF_SIZES" \
+              --settle-ms=3500 \
+              --out=benchmarks/results/linux
+
+      - name: Upload Linux benchmark report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-linux-report
+          path: benchmarks/results/linux/

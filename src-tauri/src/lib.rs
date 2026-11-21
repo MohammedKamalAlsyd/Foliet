@@ -278,6 +278,23 @@ fn build_pdf_response(method: &str, uri_path: &str, range_hdr: Option<&str>) -> 
 }
 
 #[tauri::command]
+fn get_launch_pdf_path() -> Option<String> {
+    std::env::args().skip(1).find_map(|arg| {
+        let p = PathBuf::from(&arg);
+        let is_pdf = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("pdf"))
+            .unwrap_or(false);
+        if is_pdf && p.is_file() {
+            Some(arg)
+        } else {
+            None
+        }
+    })
+}
+
+#[tauri::command]
 async fn export_pdf(
     source_path: String,
     target_path: String,
@@ -346,6 +363,7 @@ pub fn run() {
             });
         })
         .invoke_handler(tauri::generate_handler![
+            get_launch_pdf_path,
             export_pdf,
             pdf_reader::open_pdf_document,
             pdf_reader::extract_pdf_annotations,
