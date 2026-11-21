@@ -18,6 +18,10 @@ on:
         description: "Build Linux (x64)"
         type: boolean
         default: true
+      build_msix:
+        description: "Build Windows Microsoft Store package (MSIX)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -172,8 +176,75 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: "Foliet v__VERSION__"
-          releaseBody: "See the assets below to download and install this version of Foliet."
+          releaseAssetNamePattern: "Foliet-[version]-[platform]-[arch][setup][ext]"
+          releaseBody: |
+            ### Which file should I download?
+
+            | OS | Recommended Installer | Alternative |
+            | :--- | :--- | :--- |
+            | **Windows (x64)** | `Foliet-__VERSION__-windows-x86_64-setup.exe` | `Foliet-__VERSION__-windows-x86_64.msi` |
+            | **macOS (Apple Silicon)** | `Foliet-__VERSION__-macos-aarch64.dmg` | — |
+            | **Linux (Debian / Ubuntu)** | `Foliet-__VERSION__-linux-x86_64.deb` | `Foliet-__VERSION__-linux-x86_64.AppImage` |
+            | **Linux (Fedora / RHEL)** | `Foliet-__VERSION__-linux-x86_64.rpm` | `Foliet-__VERSION__-linux-x86_64.AppImage` |
+
+            > **Ignore updater files:** `latest.json` and `*.app.tar.gz` are used automatically by Foliet's in-app updater (cryptographic signatures are embedded inside `latest.json`).
+            >
+            > **First-launch security note (unsigned open-source builds):**
+            > - **Windows SmartScreen:** Click **More info → Run anyway** when running the installer for the first time.
+            > - **macOS Gatekeeper:** Drag to Applications, then **Right-click → Open** (or run `xattr -cr /Applications/foliet.app`).
           releaseDraft: true
           prerelease: false
           uploadUpdaterJson: true
+          uploadUpdaterSignatures: false
           args: ${{ matrix.args }}
+
+  build-msix:
+    name: Build Microsoft Store MSIX (Windows x64)
+    needs: verify
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_msix == true }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Store-mode Tauri binary (no external self-updater)
+        env:
+          VITE_STORE_BUILD: "true"
+        run: pnpm tauri build --no-bundle
+
+      - name: Package unsigned MSIX for Microsoft Partner Center
+        env:
+          MSIX_IDENTITY_NAME: ${{ secrets.MSIX_IDENTITY_NAME || vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ secrets.MSIX_PUBLISHER || vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ secrets.MSIX_PUBLISHER_DISPLAY_NAME || vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+        run: node scripts/build-msix.mjs
+
+      - name: Upload Microsoft Store MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-msix-store-package
+          path: src-tauri/target/release/bundle/msix/*.msix
+          if-no-files-found: error

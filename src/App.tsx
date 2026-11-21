@@ -21,6 +21,9 @@ import { useSystemStore } from "@/stores/systemStore";
 
 type PendingLeave = "home" | "close" | "update-install" | "update-relaunch" | null;
 
+// Microsoft Store (MSIX) builds receive updates through the Store itself.
+const IS_STORE_BUILD = import.meta.env.VITE_STORE_BUILD === "true";
+
 export function App() {
   const activeDoc = useDocumentStore((s) => s.activeDoc);
   const isDirty = useDocumentStore((s) => s.isDirty);
@@ -54,9 +57,9 @@ export function App() {
     void useAiConfigStore.getState().hydrateSecrets();
   }, []);
 
-  // Silent startup update check in production builds only
+  // Silent startup update check in standalone production builds only (disabled in Store MSIX builds)
   useEffect(() => {
-    if (!import.meta.env.PROD) return;
+    if (!import.meta.env.PROD || IS_STORE_BUILD) return;
     let active = true;
 
     void checkForUpdates({ silent: true }).then(({ update }) => {
@@ -211,7 +214,7 @@ export function App() {
       <Titlebar
         onNavigateHome={requestHome}
         onRequestClose={requestClose}
-        onCheckForUpdates={handleCheckForUpdates}
+        onCheckForUpdates={IS_STORE_BUILD ? undefined : handleCheckForUpdates}
         isCheckingUpdates={isCheckingUpdates}
         hasUpdateAvailable={availableUpdate !== null}
       />

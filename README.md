@@ -37,17 +37,42 @@
 
 ---
 
-## Download
+## Download & Installation
 
-Pre-built signed desktop installers with built-in automatic updates are published on [GitHub Releases](https://github.com/MohammedKamalAlsyd/Foliet/releases/latest):
+Pre-built desktop installers with built-in automatic updates are published on [GitHub Releases](https://github.com/MohammedKamalAlsyd/Foliet/releases/latest) (or via the [Foliet Download Page](https://mohammedkamalalsyd.github.io/Foliet/), which detects your OS automatically):
 
-| Platform | Architecture | Format | Download |
+### Which File Should I Download?
+
+| Platform | Architecture | Recommended File | Alternative |
 | :--- | :--- | :--- | :--- |
-| **Windows** | x64 (`Windows 10/11`) | `.exe` (NSIS) / `.msi` | [Download for Windows](https://github.com/MohammedKamalAlsyd/Foliet/releases/latest) |
-| **macOS** | Apple Silicon (`arm64`, macOS 13.4+) | `.dmg` / `.app.tar.gz` | [Download for macOS](https://github.com/MohammedKamalAlsyd/Foliet/releases/latest) |
-| **Linux** | x64 (`Ubuntu 24.04+` / modern distros) | `.AppImage` / `.deb` / `.rpm` | [Download for Linux](https://github.com/MohammedKamalAlsyd/Foliet/releases/latest) |
+| **Windows** | x64 (`Windows 10/11`) | `Foliet-<ver>-windows-x86_64-setup.exe` *(NSIS installer)* | `Foliet-<ver>-windows-x86_64.msi` *(enterprise MSI)* |
+| **macOS** | Apple Silicon (`arm64`, macOS 13.4+) | `Foliet-<ver>-macos-aarch64.dmg` | — |
+| **Linux (Debian / Ubuntu)** | x64 (`Ubuntu 24.04+`) | `Foliet-<ver>-linux-x86_64.deb` | `Foliet-<ver>-linux-x86_64.AppImage` *(portable)* |
+| **Linux (Fedora / RHEL)** | x64 | `Foliet-<ver>-linux-x86_64.rpm` | `Foliet-<ver>-linux-x86_64.AppImage` *(portable)* |
 
-> **Auto-Updates:** Foliet checks for signed releases on startup (and on demand via the Titlebar update button) using `tauri-plugin-updater`. If you have unsaved annotations open, Foliet always prompts before restarting so edits are never lost.
+> **What about `latest.json` and `*.app.tar.gz`?**  
+> You do **not** need to download those files manually — they are used automatically by Foliet's in-app updater (cryptographic Minisign signatures are embedded directly inside `latest.json`).
+
+### OS Installation Notes
+
+- **Windows (SmartScreen Notice):**  
+  Direct GitHub downloads are currently not Authenticode-signed, so Windows Defender SmartScreen may display *"Windows protected your PC — Unknown publisher"* on first install. Click **More info → Run anyway** to proceed. Once installed, future updates run directly inside Foliet via Minisign verification without re-triggering browser SmartScreen warnings. *(Microsoft Store MSIX packaging is also included in this repository — see [Building for Microsoft Store (MSIX)](#building-for-microsoft-store-msix) below.)*
+- **macOS (Gatekeeper Notice):**  
+  Open the `.dmg`, drag **Foliet** into **Applications**, and on first launch **Right-click (Control-click) → Open → Open** (or allow it under **System Settings → Privacy & Security → Open Anyway**). If macOS reports the unsigned binary as quarantined/damaged, clear the download quarantine attribute once in Terminal:
+  ```bash
+  xattr -cr /Applications/foliet.app
+  ```
+- **Linux:**  
+  No signing warnings. Install with:
+  ```bash
+  # Ubuntu / Debian (.deb)
+  sudo apt install ./Foliet-*-linux-x86_64.deb
+
+  # Portable AppImage (any modern distro)
+  chmod +x Foliet-*-linux-x86_64.AppImage && ./Foliet-*-linux-x86_64.AppImage
+  ```
+
+> **Auto-Updates:** Standalone GitHub builds check for signed releases on startup (and on demand via the Titlebar update button) using `tauri-plugin-updater`. If you have unsaved annotations open, Foliet always prompts before restarting so edits are never lost.
 
 ---
 
@@ -148,10 +173,27 @@ pnpm run version:check                  # Verify version sync across package.jso
 
 ### Cutting a Release
 ```bash
-pnpm run version:bump 0.1.2             # Syncs package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml
-git commit -am "chore: release v0.1.2"
-git tag v0.1.2
+pnpm run version:bump 0.1.3             # Syncs package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml
+git commit -am "chore: release v0.1.3"
+git tag v0.1.3
 git push origin main --tags             # Triggers .github/workflows/release.yml
+```
+
+### Building for Microsoft Store (MSIX)
+Foliet includes an unsigned Windows x64 **MSIX** packaging pipeline for Microsoft Store submission (where Microsoft signs the package with its trusted Store certificate for zero SmartScreen warnings):
+
+1. Register a free ($0) individual developer account at [storedeveloper.microsoft.com](https://storedeveloper.microsoft.com), reserve **Foliet** in Partner Center, and copy your **Product Identity** fields (`Package/Identity/Name`, `Package/Identity/Publisher`, and `Package/Properties/PublisherDisplayName`).
+2. Add those 3 values as GitHub Actions **Secrets** or **Variables** in your repository (`MSIX_IDENTITY_NAME`, `MSIX_PUBLISHER`, `MSIX_PUBLISHER_DISPLAY_NAME`).
+3. On every release tag (or manual **Release Foliet** workflow run), GitHub Actions builds a Store-mode binary (`VITE_STORE_BUILD=true`, which disables external self-updates per Store policy) and uploads `windows-msix-store-package` (`foliet_<version>_x64.msix`) ready to submit in Partner Center.
+
+To build the `.msix` locally on Windows (requires Windows 10/11 SDK `MakeAppx.exe`):
+```powershell
+$env:VITE_STORE_BUILD = "true"
+$env:MSIX_IDENTITY_NAME = "YourPartnerCenter.IdentityName"
+$env:MSIX_PUBLISHER = "CN=XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+$env:MSIX_PUBLISHER_DISPLAY_NAME = "Mohammed Kamal Alsyd"
+pnpm tauri build --no-bundle
+pnpm run msix:build
 ```
 
 ---
